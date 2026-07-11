@@ -490,6 +490,21 @@ prototype 通用按钮（无专用逻辑者）走此字典取说明文本，未�
 - AI 工具 `read_sensor`/`get_trend`：走 `await HMI.modbus.readParam`，返回契约不变。
 - 串口页手动发送（console.handleSend）：**独立路径**，不走协议层，是工程师调试用的 HEX 手动收发。
 
+**异常处理（第三阶段新增）**：协议层不再是"必然成功"，含完整异常流程：
+
+| 异常类型 | 触发 | 处理 | 报警 |
+| :--- | :--- | :--- | :--- |
+| 断线 | `connectionState !== "connected"` | 直接返回 `{ok:false, error:"串口未连接"}`，不收发 | 不报警（操作员可见连接状态） |
+| 从站无响应（超时） | `CONFIG.noResponseRate` 概率（默认 8%） | 等待 `CONFIG.timeoutMs`（100ms）→ 重试 `maxRetries`（1次）→ 仍失败返回 error | 注入"预警"级报警 |
+| CRC 校验失败 | `CONFIG.crcErrorRate` 概率（默认 3%）+ 回包 CRC 二次校验 | 重试 → 仍失败返回 error | 注入"一般"级报警 |
+| 写响应不匹配 | echo 与请求帧不一致 | 重试 → 仍失败返回 error | 不报警 |
+
+- 重试循环：`for attempt <= maxRetries`，每次重试都重新生成帧并注入 TX 日志。
+- 异常注入串口日志：TIMEOUT 行、CRC 行，用户在串口页可见。
+- 异常注入报警表：通信失败达上限后自动 push 到 `store.alarms`（未确认状态），报警页计数联动。
+- 调用方（monitor/AI）：`result.ok === false` 时 metric 显示 `--`、AI 工具返回错误说明。
+- 概率值（`noResponseRate/crcErrorRate`）仅原型演示用；PySide6 阶段异常来自真实通信。
+
 **注意（数据定义层面）**：type 与 min/max 须匹配——uint16 是无符号，无法表示负数 raw。若点位范围含负数（如温度 -40~125），应定义 type 为 int16，否则协议层返回值会在 0~max 范围。
 
 ---

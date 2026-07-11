@@ -209,15 +209,17 @@
         if (!params.length) { this._stopRefresh(); return; }
 
         // 通过协议层读取每个采样参数（生成真实报文+模拟回包），刷新 metric 和趋势
-        const decimalsMap = {};
         for (const p of params) {
           const result = await HMI.modbus.readParam(p);
-          if (!result.ok) continue;
+          const card = document.querySelector(`[data-metric-name="${CSS.escape(p.name)}"] [data-metric-value]`);
+          if (!result.ok) {
+            // 通信失败：metric 显示异常态，不更新趋势
+            if (card) card.innerHTML = `--<small>${util.escapeHtml(p.unit || "")}</small>`;
+            continue;
+          }
           const decimals = Number(p.decimals) || 0;
           const text = result.value.toFixed(decimals);
-          decimalsMap[p.name] = decimals;
-          // 刷新 metric 卡数值（直接改 DOM）
-          const card = document.querySelector(`[data-metric-name="${CSS.escape(p.name)}"] [data-metric-value]`);
+          // 刷新 metric 卡数值（复用上面的 card 引用）
           if (card) card.innerHTML = `${util.escapeHtml(text)}<small>${util.escapeHtml(p.unit || "")}</small>`;
           // 追加趋势点
           ensureHistory(p.name);

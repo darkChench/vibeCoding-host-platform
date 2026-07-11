@@ -108,7 +108,7 @@
       );
     }
 
-    const resp = [slaveId, FC_READ_HOLDING, byteCount, ...dataBytes];
+    const resp = appendCrc([slaveId, FC_READ_HOLDING, byteCount, ...dataBytes]);
     return { resp, rawValue, engValue };
   }
 
@@ -154,64 +154,185 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
+  /**
+   * 协议层配置（模拟异常概率，PySide6 阶段这些由真实设备决定）。
+   * 概率值用于原型演示异常流程；生产环境这些异常来自真实通信。
+   */
+  const CONFIG = {
+    timeoutMs: 100,          // 超时阈值（PRD §6.3：100ms）
+    maxRetries: 1,           // 重试次数（PRD §6.3：1 次）
+    noResponseRate: 0.08,    // 模拟"从站无响应"概率（8%）
+    crcErrorRate: 0.03,      // 模拟"CRC 校验失败"概率（3%）
+  };
+
+  /** 报警自增 id */
+  let alarmSeq = 1000;
+
+  /**
+   * 往报警表注入一条记录（CRC 错误/无响应等通信异常）。
+   * 复用 store.alarms 结构：{id, time, content, terminal, level, acknowledged}
+   */
+  function pushAlarm(content, level) {
+    if (!HMI.store || !Array.isArray(HMI.store.alarms)) return;
+    HMI.store.alarms.push({
+      id: alarmSeq++,
+      time: util.nowHMS(),
+      content,
+      terminal: HMI.store.currentPort || "COM",
+      level: level || "一般",
+      acknowledged: false,
+    });
+  }
+
+  /**
+   * 校验回包 CRC：末两字节（LE）应等于前面字节的 crc16。
+   * @returns {boolean} true=CRC 正确
+   */
+  function verifyCrc(bytes) {
+    if (bytes.length < 3) return false;
+    const payload = bytes.slice(0, bytes.length - 2);
+    const crc = util.crc16(payload);
+    return (crc & 0xff) === bytes[bytes.length - 2] && ((crc >> 8) & 0xff) === bytes[bytes.length - 1];
+  }
+
+  /**
+   * 模拟一次"带异常的收发"：可能正常回包、可能无响应（超时）、可能 CRC 错。
+   * @param {number[]} frame 请求帧
+   * @param {Object} param 参数对象（读时用，写时可传 null）
+   * @param {boolean} isWrite 是否写操作
+   * @returns {Promise<{type:"ok", resp:number[]} | {type:"timeout"} | {type:"crc_error"}>}
+   */
+  async function transactOnce(frame, param, isWrite) {
+    logToConsole("tx", "TX", util.bytesToHex(frame));
+
+    // 模拟无响应（从站不回）
+    if (Math.random() < CONFIG.noResponseRate) {
+      await delay(CONFIG.timeoutMs);
+      return { type: "timeout" };
+    }
+
+    await delay(50 + Math.random() * 100);
+
+    // 生成正常回包
+    let resp;
+    if (isWrite) {
+      resp = simulateWriteResponse(frame);
+    } else {
+      resp = simulateReadResponse(frame, param).resp;
+    }
+
+    // 模拟 CRC 错误：篡改回包最后一字节
+    if (Math.random() < CONFIG.crcErrorRate) {
+      resp = resp.slice();
+      resp[resp.length - 1] ^= 0xff; // 破坏 CRC
+      logToConsole("rx", "RX", util.bytesToHex(resp));
+      return { type: "crc_error", resp };
+    }
+
+    logToConsole("rx", "RX", util.bytesToHex(resp));
+    return { type: "ok", resp };
+  }
+
   const modbus = {
     /**
-     * 读取单个参数的值。生成请求帧 → 注入 TX → 模拟延迟 → 模拟回包 → 注入 RX → 解析。
-     * @param {Object} param 参数对象（需有 address/type/decimals/min/max）
-     * @returns {Promise<{ok:true, value:number, raw:number, frame:number[], response:number[]} | {ok:false, error:string}>}
+     * 读取单个参数。含断线检测、超时重试、CRC 校验、异常报警。
+     * @returns {Promise<{ok:true,...} | {ok:false, error:string, retried:number}>}
      */
     async readParam(param) {
+      // 断线检测
+      if (HMI.store.connectionState !== "connected") {
+        return { ok: false, error: "串口未连接", retried: 0 };
+      }
+
       const slaveId = HMI.store.slaveId || 1;
       const regCount = typeToRegCount(param.type);
-      const frame = buildReadFrame(slaveId, param.address, regCount);
+      let lastError = "";
+      let retried = 0;
 
-      // 注入 TX 日志
-      logToConsole("tx", "TX", util.bytesToHex(frame));
+      for (let attempt = 0; attempt <= CONFIG.maxRetries; attempt++) {
+        const frame = buildReadFrame(slaveId, param.address, regCount);
+        const result = await transactOnce(frame, param, false);
 
-      // 模拟串口往返延迟（50-150ms）
-      await delay(50 + Math.random() * 100);
+        if (result.type === "ok") {
+          // CRC 二次校验（回包自身完整性）
+          if (!verifyCrc(result.resp)) {
+            lastError = "CRC 校验失败";
+            logToConsole("rx", "CRC", `回包校验失败：${util.bytesToHex(result.resp)}`);
+            if (attempt < CONFIG.maxRetries) { retried++; continue; }
+            pushAlarm(`读取 ${param.display || param.name} 时 CRC 校验失败`, "一般");
+            return { ok: false, error: lastError, retried };
+          }
+          const parsed = parseReadResponse(result.resp, param);
+          return { ok: true, value: parsed.engValue, raw: parsed.rawValue, frame, response: result.resp, retried };
+        }
 
-      // 模拟设备回包
-      const { resp, rawValue, engValue } = simulateReadResponse(frame, param);
-      logToConsole("rx", "RX", util.bytesToHex(resp));
+        if (result.type === "timeout") {
+          lastError = "从站无响应（超时）";
+          logToConsole("rx", "TIMEOUT", `等待 ${CONFIG.timeoutMs}ms 无响应`);
+          if (attempt < CONFIG.maxRetries) { retried++; continue; }
+          pushAlarm(`读取 ${param.display || param.name} 时从站无响应`, "预警");
+          return { ok: false, error: lastError, retried };
+        }
 
-      // 解析校验（回包应能解析出同样的值）
-      const parsed = parseReadResponse(resp, param);
-
-      return {
-        ok: true,
-        value: parsed.engValue,
-        raw: parsed.rawValue,
-        frame,
-        response: resp,
-      };
+        if (result.type === "crc_error") {
+          lastError = "回包 CRC 错误";
+          if (attempt < CONFIG.maxRetries) { retried++; continue; }
+          pushAlarm(`读取 ${param.display || param.name} 时回包 CRC 错误`, "一般");
+          return { ok: false, error: lastError, retried };
+        }
+      }
+      return { ok: false, error: lastError || "未知错误", retried };
     },
 
     /**
-     * 写入单个参数（功能码 06）。生成写帧 → 注入 TX → 模拟延迟 → echo 回包 → 注入 RX。
-     * @param {Object} param 参数对象
-     * @param {number} engValue 要写入的工程值
-     * @returns {Promise<{ok:true, frame:number[], response:number[]} | {ok:false, error:string}>}
+     * 写入单个参数（功能码 06）。含断线检测、超时重试、CRC 校验。
      */
     async writeParam(param, engValue) {
+      if (HMI.store.connectionState !== "connected") {
+        return { ok: false, error: "串口未连接", retried: 0 };
+      }
+
       const slaveId = HMI.store.slaveId || 1;
       const decimals = Number(param.decimals) || 0;
       const scale = Math.pow(10, decimals);
       const rawValue = Math.round(Number(engValue) * scale);
 
-      const frame = buildWriteFrame(slaveId, param.address, rawValue);
-      logToConsole("tx", "TX", util.bytesToHex(frame));
+      let lastError = "";
+      let retried = 0;
+      for (let attempt = 0; attempt <= CONFIG.maxRetries; attempt++) {
+        const frame = buildWriteFrame(slaveId, param.address, rawValue);
+        const result = await transactOnce(frame, null, true);
 
-      await delay(50 + Math.random() * 100);
-
-      const resp = simulateWriteResponse(frame);
-      logToConsole("rx", "RX", util.bytesToHex(resp));
-
-      return { ok: true, frame, response: resp };
+        if (result.type === "ok") {
+          // 写响应=echo，校验是否与请求一致
+          if (util.bytesToHex(result.resp) !== util.bytesToHex(frame)) {
+            lastError = "写响应与请求不匹配";
+            if (attempt < CONFIG.maxRetries) { retried++; continue; }
+            return { ok: false, error: lastError, retried };
+          }
+          return { ok: true, frame, response: result.resp, retried };
+        }
+        if (result.type === "timeout") {
+          lastError = "从站无响应（超时）";
+          logToConsole("rx", "TIMEOUT", `等待 ${CONFIG.timeoutMs}ms 无响应`);
+          if (attempt < CONFIG.maxRetries) { retried++; continue; }
+          pushAlarm(`写入 ${param.display || param.name} 时从站无响应`, "预警");
+          return { ok: false, error: lastError, retried };
+        }
+        if (result.type === "crc_error") {
+          lastError = "回包 CRC 错误";
+          if (attempt < CONFIG.maxRetries) { retried++; continue; }
+          return { ok: false, error: lastError, retried };
+        }
+      }
+      return { ok: false, error: lastError || "未知错误", retried };
     },
 
+    /** 协议层配置（供测试/调试读取） */
+    CONFIG,
+
     /** 暴露内部方法供测试/调试 */
-    _internal: { typeToRegCount, appendCrc, buildReadFrame, buildWriteFrame, simulateReadResponse, parseReadResponse },
+    _internal: { typeToRegCount, appendCrc, buildReadFrame, buildWriteFrame, simulateReadResponse, parseReadResponse, verifyCrc, transactOnce },
   };
 
   HMI.modbus = modbus;
