@@ -77,8 +77,25 @@
   }
 
   /**
+   * float32 ↔ 4 字节（IEEE754，Big-Endian word order，高字在前）。
+   * Modbus 常见的 float32 是 2 个寄存器，高字在前（ABCD 字节序）。
+   */
+  function float32ToBytes(value) {
+    const buf = new ArrayBuffer(4);
+    new DataView(buf).setFloat32(0, value, false); // false = Big-Endian
+    return Array.from(new Uint8Array(buf));
+  }
+
+  function bytesToFloat32(bytes) {
+    const buf = new ArrayBuffer(4);
+    const view = new DataView(buf);
+    bytes.forEach((b, i) => view.setUint8(i, b));
+    return view.getFloat32(0, false);
+  }
+
+  /**
    * 模拟设备响应读请求（功能码 03）。
-   * 在参数 min/max 范围内生成随机原始整数值，按 type 编码进响应帧。
+   * 在参数 min/max 范围内生成随机工程值，按 type 编码进响应帧。
    * 帧: [slaveId, 0x03, byteCount, data..., crcLo, crcHi]
    */
   function simulateReadResponse(frame, param) {
@@ -86,22 +103,29 @@
     const regCount = typeToRegCount(param.type);
     const byteCount = regCount * 2;
 
-    // 在 min/max 范围内生成随机原始值（整数，考虑 decimals 缩放）
-    const decimals = Number(param.decimals) || 0;
-    const scale = Math.pow(10, decimals);
+    // 在 min/max 范围内生成随机工程值
     const min = Number(param.min);
     const max = Number(param.max);
     const safeMin = Number.isFinite(min) ? min : 0;
     const safeMax = Number.isFinite(max) ? max : 100;
     const engValue = safeMin + Math.random() * (safeMax - safeMin);
-    const rawValue = Math.round(engValue * scale);
 
-    // 按 type 编码数据字节（Big-Endian，高字在前）
-    const dataBytes = [];
-    if (regCount === 1) {
+    // 按 type 编码数据字节
+    const decimals = Number(param.decimals) || 0;
+    const scale = Math.pow(10, decimals);
+    let dataBytes = [];
+    let rawValue;
+    if (param.type === "float32") {
+      // float32: IEEE754 编码，工程值直接作为浮点存储（不再 decimals 缩放）
+      dataBytes = float32ToBytes(engValue);
+      rawValue = engValue;
+    } else if (regCount === 1) {
+      // 16 位整数类型：工程值 × scale 取整
+      rawValue = Math.round(engValue * scale);
       dataBytes.push((rawValue >> 8) & 0xff, rawValue & 0xff);
     } else {
-      // 32 位：高字在前（Big-Endian word order）
+      // 32 位整数类型：高字在前
+      rawValue = Math.round(engValue * scale);
       dataBytes.push(
         (rawValue >> 24) & 0xff, (rawValue >> 16) & 0xff,
         (rawValue >> 8) & 0xff, rawValue & 0xff
@@ -128,13 +152,21 @@
     const regCount = typeToRegCount(param.type);
     const dataBytes = respBytes.slice(3, 3 + regCount * 2);
     let rawValue;
-    if (regCount === 1) {
+    let engValue;
+    if (param.type === "float32") {
+      // float32: IEEE754 解码，工程值即浮点本身（不再 decimals 缩放）
+      rawValue = bytesToFloat32(dataBytes);
+      const decimals = Number(param.decimals) || 0;
+      engValue = Number(rawValue.toFixed(decimals));
+    } else if (regCount === 1) {
       rawValue = (dataBytes[0] << 8) | dataBytes[1];
+      const decimals = Number(param.decimals) || 0;
+      engValue = Number((rawValue / Math.pow(10, decimals)).toFixed(decimals));
     } else {
       rawValue = (dataBytes[0] << 24) | (dataBytes[1] << 16) | (dataBytes[2] << 8) | dataBytes[3];
+      const decimals = Number(param.decimals) || 0;
+      engValue = Number((rawValue / Math.pow(10, decimals)).toFixed(decimals));
     }
-    const decimals = Number(param.decimals) || 0;
-    const engValue = Number((rawValue / Math.pow(10, decimals)).toFixed(decimals));
     return { rawValue, engValue };
   }
 

@@ -154,8 +154,8 @@
 
     /** Modbus 参数定义（params 页，预置 4 行） */
     params: [
-      { name: "temperature", display: "温度", address: "0x0000", category: "采样参数", type: "uint16", access: "只读", unit: "℃", decimals: 1, min: -40, max: 125, desc: "缩放 0.1" },
-      { name: "pressure", display: "压力", address: "0x0001", category: "采样参数", type: "uint16", access: "只读", unit: "MPa", decimals: 2, min: 0, max: 60, desc: "缩放 0.01" },
+      { name: "temperature", display: "温度", address: "0x0000", category: "采样参数", type: "float32", access: "只读", unit: "℃", decimals: 1, min: -40, max: 125, desc: "缩放 0.1" },
+      { name: "pressure", display: "压力", address: "0x0002", category: "采样参数", type: "float32", access: "只读", unit: "MPa", decimals: 2, min: 0, max: 60, desc: "缩放 0.01" },
       { name: "sample_period", display: "采样周期", address: "0x0010", category: "配置参数", type: "uint16", access: "读写", unit: "ms", decimals: 0, min: 200, max: 5000, desc: "写入需确认" },
       { name: "device_addr", display: "设备地址", address: "0x0011", category: "配置参数", type: "uint8", access: "读写", unit: "-", decimals: 0, min: 1, max: 247, desc: "Modbus 从站地址" },
     ],
