@@ -87,6 +87,7 @@
           btn.dataset.sendHistoryToggle !== undefined ||
           btn.dataset.sendHistoryClear !== undefined ||
           btn.dataset.aiSend !== undefined ||
+          btn.dataset.consoleClear !== undefined ||
           btn.classList.contains("console-tab")
         ) return;
         btn.addEventListener("click", () => HMI.modal.handlePrototypeAction(btn.textContent));
@@ -165,6 +166,7 @@
       this._bindGlobal();
       this.showPage("overview");
       this.updateAiStatus();
+      this.updateMonitorPointCount();
     },
 
     /** 更新工具栏 AI 状态指示（根据是否有启用的模型配置） */
@@ -179,6 +181,14 @@
         el.textContent = "AI 未配置";
         el.className = "stat-warn";
       }
+    },
+
+    /** 更新侧边栏"实时监控"的采样点数量标签（与 store.params 联动） */
+    updateMonitorPointCount() {
+      const el = document.getElementById("monitorPointCount");
+      if (!el) return;
+      const count = HMI.store.sampleParams().length;
+      el.textContent = `${count} 点`;
     },
   };
 

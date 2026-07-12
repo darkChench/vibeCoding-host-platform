@@ -398,7 +398,7 @@
 
 .console-tabs {
   display: grid;
-  grid-template-columns: auto auto auto 1fr auto;
+  grid-template-columns: auto auto auto 1fr auto auto;
   align-items: center;
   gap: 6px;
   padding: 0 10px;

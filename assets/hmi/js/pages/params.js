@@ -249,6 +249,7 @@
         this._renderTable();
         this._renderForm();
         this._updateDirtyTag();
+        HMI.app.updateMonitorPointCount();
         HMI.toast.show(isEdit ? "已更新参数" : "已新增参数");
       }
     },
@@ -282,6 +283,7 @@
           store.paramsDirty = true;
           this._renderTable();
           this._updateDirtyTag();
+          HMI.app.updateMonitorPointCount();
           HMI.toast.show(`已删除 ${names.length} 条参数`);
         });
         return;

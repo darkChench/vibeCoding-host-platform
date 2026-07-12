@@ -40,6 +40,7 @@
               <button class="console-tab" type="button" data-console="diagnostic">诊断日志</button>
               <span></span>
               <label class="check-label"><input type="checkbox" checked aria-label="显示时间戳"><span>时间戳</span></label>
+              <button class="btn secondary" type="button" data-console-clear title="清空当前标签的日志">清空</button>
             </div>
             <div class="terminal" aria-label="serial raw log">${this._linesHtml(this.currentTab)}</div>
             <div class="history-popover" data-send-history-panel>
@@ -71,6 +72,9 @@
 
       // 自定义下拉（发送格式 / 行结束符）
       HMI.dropdown.bind(content);
+
+      // 清空当前 tab 日志
+      content.querySelector("[data-console-clear]")?.addEventListener("click", () => this.clearCurrentLog());
 
       // tab 切换
       content.querySelectorAll(".console-tab[data-console]").forEach((btn) => {
@@ -190,6 +194,16 @@
         store.autoSendTimer = null;
         this.lines.diagnostic.push(["tx", "INFO", util.nowHMS(), "自动发送已停止"]);
       }
+    },
+
+    /** 清空当前 tab 的日志 */
+    clearCurrentLog() {
+      const tab = this.currentTab;
+      const count = (this.lines[tab] || []).length;
+      this.lines[tab] = [];
+      const terminal = document.getElementById("content").querySelector(".terminal");
+      if (terminal) terminal.innerHTML = "";
+      HMI.toast.show(`已清空 ${count} 条日志`);
     },
 
     /** 渲染发送历史列表 */
