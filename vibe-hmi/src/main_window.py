@@ -12,6 +12,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from . import theme
+from .page_registry import PAGES, get_page
+from .sidebar import Sidebar
+from .main_area import MainArea
+from .pages.placeholder import PlaceholderPage
 
 
 class MainWindow(QMainWindow):
@@ -23,8 +27,8 @@ class MainWindow(QMainWindow):
         self.resize(1220, 760)
         self.setMinimumSize(900, 560)
         self._build_menu()
-        self._build_central()
         self._build_statusbar()
+        self._build_central()
 
     def _build_menu(self):
         """原生菜单栏：文件/连接/设备/数据/工具/帮助"""
@@ -113,16 +117,48 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_workspace(self):
-        """工作区（票02 填充侧边栏+页面路由，暂占位）"""
+        """工作区：侧边栏 + 主区（含页面路由）"""
         ws = QFrame()
         ws.setObjectName("workspace")
-        placeholder = QLabel("工作区（票02 实现侧边栏+页面路由）")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_LG}pt;")
         lay = QHBoxLayout(ws)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(placeholder)
+        lay.setSpacing(0)
+
+        # 侧边栏
+        self.sidebar = Sidebar()
+        self.sidebar.page_clicked.connect(self.show_page)
+        lay.addWidget(self.sidebar)
+
+        # 主区（tabs + 内容）
+        self.main_area = MainArea()
+        lay.addWidget(self.main_area, 1)
+
+        # 注册所有页面（占位，后续票替换）
+        # page_id → (页面名, 对应票号)
+        ticket_map = {
+            "overview": "票07", "serial": "票06", "monitor": "票05",
+            "statusPolicy": "票07", "params": "票04", "alarms": "票07",
+            "history": "票08", "settings": "票07", "aiAssistant": "票09",
+            "modelConfig": "票09",
+        }
+        for page in PAGES:
+            widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
+            self.main_area.add_page(page.page_id, widget)
+
+        # 默认显示首页
+        self.show_page("overview")
         return ws
+
+    def show_page(self, page_id: str):
+        """路由：切换页面，联动侧边栏 active、tabs、状态栏"""
+        meta = get_page(page_id)
+        if not meta:
+            return
+        self.sidebar.set_active_page(page_id)
+        self.main_area.show_page(page_id)
+        # 状态栏当前页
+        self.lbl_current_page.setText(meta.name)
+        self._current_page_id = page_id
 
     def _build_statusbar(self):
         """原生状态栏"""

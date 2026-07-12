@@ -127,4 +127,78 @@ def build_qss() -> str:
     QFrame#workspace {{
         background: {c["WORKSPACE_BG"]};
     }}
+
+    /* ===== 侧边栏 ===== */
+    QWidget#sidebar {{
+        background: {c["SIDEBAR_BG"]};
+        border-right: 1px solid {c["LINE"]};
+    }}
+    QLabel#pane-title {{
+        background: {c["PANE_TITLE_BG"]};
+        color: {c["TEXT"]};
+        font-weight: {theme.FW_BOLD};
+        font-size: {theme.FS_MD}pt;
+        padding: 0 12px;
+        min-height: 38px;
+        max-height: 38px;
+        border-bottom: 1px solid {c["LINE"]};
+    }}
+    QWidget#tree QLabel#tree-heading {{
+        color: {c["MUTED"]};
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BOLD};
+        padding: 0 8px;
+    }}
+    QPushButton#tree-item {{
+        text-align: left;
+        min-height: {theme.CONTROL_H}px;
+        padding: 0 8px;
+        border: 1px solid transparent;
+        border-radius: {r["sm"]}px;
+        background: transparent;
+        color: {c["TEXT"]};
+        font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_REGULAR};
+    }}
+    QPushButton#tree-item:hover {{
+        border-color: {c["LINE"]};
+        background: #ffffff;
+    }}
+    QPushButton#tree-item[active="true"] {{
+        border-color: {c["SELECT_BORDER_TREE"]};
+        background: {c["SELECT_BG"]};
+        color: {c["PRIMARY"]};
+        font-weight: {theme.FW_BOLD};
+    }}
+
+    /* ===== 主区 tabs ===== */
+    QFrame#main-area {{
+        background: #ffffff;
+        border-right: 1px solid {c["LINE"]};
+    }}
+    QScrollArea#tabs-scroll {{
+        background: #f7f9fc;
+        border-bottom: 1px solid {c["LINE"]};
+        border: none;
+    }}
+    QWidget#tabs {{
+        background: transparent;
+    }}
+    QPushButton#tab {{
+        min-height: {theme.CONTROL_H}px;
+        padding: 0 12px;
+        border: 1px solid {c["LINE"]};
+        border-bottom: none;
+        border-top-left-radius: {r["md"]}px;
+        border-top-right-radius: {r["md"]}px;
+        background: {c["CHROME"]};
+        color: #35465a;
+        font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QPushButton#tab:checked {{
+        background: #ffffff;
+        color: {c["PRIMARY"]};
+        border-color: {c["SELECT_BORDER_TAB"]};
+    }}
     """
