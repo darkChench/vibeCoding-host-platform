@@ -28,44 +28,25 @@ def build_qss() -> str:
         color: {c["TEXT"]};
     }}
 
-    /* ===== 标题栏 ===== */
-    QFrame#titlebar {{
-        background: {c["TITLEBAR_BG"]};
-        min-height: {theme.ROW_TITLEBAR}px;
-        max-height: {theme.ROW_TITLEBAR}px;
-    }}
-    QLabel#titlebar-app {{
-        color: {c["TITLEBAR_FG"]};
-        font-weight: {theme.FW_BOLD};
-        font-size: {theme.FS_MD}pt;
-    }}
-    QLabel#titlebar-center {{
-        color: {c["TITLEBAR_SUB"]};
-        font-size: {theme.FS_MD}pt;
-    }}
-
-    /* ===== 菜单栏 ===== */
-    QFrame#menubar {{
+    /* ===== 原生菜单栏 ===== */
+    QMenuBar {{
         background: {c["MENUBAR_BG"]};
-        min-height: {theme.ROW_MENUBAR}px;
-        max-height: {theme.ROW_MENUBAR}px;
-    }}
-    QPushButton#menu-item {{
-        min-height: 25px;
-        padding: 0 10px;
-        border: 1px solid transparent;
-        border-radius: {r["xs"]}px;
-        background: transparent;
         color: {c["MENUBAR_FG"]};
         font-size: {theme.FS_MD}pt;
         font-weight: {theme.FW_REGULAR};
+        padding: 2px;
     }}
-    QPushButton#menu-item:hover {{
-        border-color: {c["LINE"]};
+    QMenuBar::item {{
+        padding: 4px 10px;
+        background: transparent;
+        border-radius: {r["xs"]}px;
+    }}
+    QMenuBar::item:selected {{
         background: #ffffff;
+        border: 1px solid {c["LINE"]};
     }}
 
-    /* ===== 工具栏 ===== */
+    /* ===== 工具栏（自定义 QFrame） ===== */
     QFrame#toolbar {{
         background: {c["CHROME"]};
         border-bottom: 1px solid {c["LINE"]};
@@ -129,28 +110,21 @@ def build_qss() -> str:
         border-color: {c["PRIMARY"]};
     }}
 
-    /* ===== 状态栏 ===== */
-    QFrame#statusbar {{
+    /* ===== 原生状态栏 ===== */
+    QStatusBar {{
         background: {c["STATUSBAR_BG"]};
-        min-height: {theme.ROW_STATUSBAR}px;
-        max-height: {theme.ROW_STATUSBAR}px;
-        border-top: 1px solid {c["LINE_DARK"]};
-    }}
-    QLabel#statusbar-text {{
         color: {c["STATUSBAR_FG"]};
         font-size: {theme.FS_SM}pt;
         font-weight: {theme.FW_REGULAR};
+        border-top: 1px solid {c["LINE_DARK"]};
+    }}
+    QStatusBar QLabel {{
+        color: {c["STATUSBAR_FG"]};
+        font-size: {theme.FS_SM}pt;
     }}
 
     /* ===== 工作区 ===== */
     QFrame#workspace {{
         background: {c["WORKSPACE_BG"]};
-    }}
-
-    /* ===== 桌面窗体外框 ===== */
-    QFrame#desktop-window {{
-        background: {c["WINDOW"]};
-        border: 1px solid {c["WINDOW_BORDER"]};
-        border-radius: {r["lg"]}px;
     }}
     """
