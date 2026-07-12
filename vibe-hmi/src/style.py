@@ -149,26 +149,51 @@ def build_qss() -> str:
         font-weight: {theme.FW_BOLD};
         padding: 0 8px;
     }}
-    QPushButton#tree-item {{
-        text-align: left;
+    QFrame#tree-item {{
         min-height: {theme.CONTROL_H}px;
-        padding: 0 8px;
         border: 1px solid transparent;
         border-radius: {r["sm"]}px;
         background: transparent;
+    }}
+    QFrame#tree-item[hovered="true"] {{
+        border-color: {c["LINE"]};
+        background: #ffffff;
+    }}
+    QFrame#tree-item[active="true"] {{
+        border-color: {c["SELECT_BORDER_TREE"]};
+        background: {c["SELECT_BG"]};
+    }}
+    QLabel#tree-icon {{
+        color: {c["MUTED"]};
+        font-size: {theme.FS_MD}pt;
+    }}
+    QFrame#tree-item[active="true"] QLabel#tree-icon {{
+        color: {c["PRIMARY"]};
+    }}
+    QLabel#tree-name {{
         color: {c["TEXT"]};
         font-size: {theme.FS_MD}pt;
         font-weight: {theme.FW_REGULAR};
     }}
-    QPushButton#tree-item:hover {{
-        border-color: {c["LINE"]};
-        background: #ffffff;
-    }}
-    QPushButton#tree-item[active="true"] {{
-        border-color: {c["SELECT_BORDER_TREE"]};
-        background: {c["SELECT_BG"]};
+    QFrame#tree-item[active="true"] QLabel#tree-name {{
         color: {c["PRIMARY"]};
         font-weight: {theme.FW_BOLD};
+    }}
+    QLabel#tree-tag {{
+        border-radius: {r["pill"]}px;
+        padding: 2px 7px;
+        background: {c["TAG_BG"]};
+        color: {c["TAG_FG"]};
+        font-size: {theme.FS_XS}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QLabel#tree-tag[variant="ok"] {{
+        background: {c["TAG_OK_BG"]};
+        color: {c["OK"]};
+    }}
+    QLabel#tree-tag[variant="warn"] {{
+        background: {c["TAG_WARN_BG"]};
+        color: {c["WARN"]};
     }}
 
     /* ===== 主区 tabs ===== */
