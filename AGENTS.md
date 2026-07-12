@@ -195,3 +195,17 @@ Memory-Bank目录中，存放所有核心规划文档，为AI提供持久、稳�
 * `product-requirements.md`:  **产品需求文档** 。由AI根据用户输入的想法生成初稿。
 * `tech-stack.md`:  **技术栈文档** 。由AI推荐并论证。
 * `implementation-plan.md`:  **实施计划** 。由AI将需求分解为具体的、可验证的步骤。
+
+## 11、Agent skills
+
+### Issue tracker
+
+Issue 和 spec 以本地 markdown 文件形式存放在 `.scratch/<feature>/`。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用五个默认 triage 角色（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix）。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单仓库布局（single-context）：根目录 `CONTEXT.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
