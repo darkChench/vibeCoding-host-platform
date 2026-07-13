@@ -27,6 +27,13 @@ def build_qss() -> str:
         font-size: {theme.FS_MD}pt;
         color: {c["TEXT"]};
     }}
+    QScrollArea {{
+        background: #ffffff;
+        border: none;
+    }}
+    QScrollArea > QWidget > QWidget {{
+        background: #ffffff;
+    }}
 
     /* ===== 原生菜单栏 ===== */
     QMenuBar {{
@@ -126,6 +133,70 @@ def build_qss() -> str:
     /* ===== 工作区 ===== */
     #workspace {{
         background: {c["WORKSPACE_BG"]};
+    }}
+
+    /* ===== 卡片 ===== */
+    QFrame#card {{
+        border: 1px solid {c["LINE"]};
+        border-radius: {r["md"]}px;
+        background: #ffffff;
+    }}
+    QFrame#card-head {{
+        min-height: 36px;
+        background: #f7f9fc;
+        border-bottom: 1px solid {c["LINE"]};
+        font-weight: {theme.FW_BOLD};
+    }}
+
+    /* ===== 表格 ===== */
+    QTableWidget {{
+        border: 1px solid {c["LINE"]};
+        border-radius: {r["md"]}px;
+        background: #ffffff;
+        gridline-color: {c["LINE"]};
+        font-size: {theme.FS_MD}pt;
+    }}
+    QTableWidget::item {{
+        padding: 6px 8px;
+        border-bottom: 1px solid {c["LINE"]};
+    }}
+    QTableWidget::item:hover {{
+        background: {c["ROW_HOVER_BG"]};
+    }}
+    QTableWidget::item:selected {{
+        background: {c["SELECT_BG"]};
+    }}
+    QHeaderView::section {{
+        background: {c["TH_BG"]};
+        color: {c["TH_FG"]};
+        font-weight: {theme.FW_BOLD};
+        padding: 6px 8px;
+        border: none;
+        border-bottom: 1px solid {c["LINE"]};
+    }}
+
+    /* ===== 标签 tag ===== */
+    QLabel#tag {{
+        border-radius: 10px;
+        padding: 3px 8px;
+        min-height: 16px;
+        background: {c["TAG_BG"]};
+        color: {c["TAG_FG"]};
+        font-size: {theme.FS_XS}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QLabel#tag[variant="warn"] {{
+        background: {c["TAG_WARN_BG"]};
+        color: {c["WARN"]};
+    }}
+    QLabel#tag[variant="ok"] {{
+        background: {c["TAG_OK_BG"]};
+        color: {c["OK"]};
+    }}
+
+    /* ===== 表单 label ===== */
+    QLabel {{
+        background: transparent;
     }}
 
     /* ===== 侧边栏 ===== */

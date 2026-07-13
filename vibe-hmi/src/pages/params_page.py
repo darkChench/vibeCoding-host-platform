@@ -13,6 +13,22 @@ from PySide6.QtWidgets import (
     QFormLayout, QFrame, QMessageBox, QAbstractItemView, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QWheelEvent
+from .. import theme
+from ..store import store
+
+
+class NoWheelComboBox(QComboBox):
+    """禁用鼠标滚轮修改的下拉框（防止误操作）"""
+    def wheelEvent(self, event: QWheelEvent):
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    """禁用鼠标滚轮修改的数字框（防止误操作）"""
+    def wheelEvent(self, event: QWheelEvent):
+        event.ignore()
+from PySide6.QtCore import Qt, Signal
 from .. import theme
 from ..store import store
 
@@ -37,17 +53,33 @@ class ParamsPage(QWidget):
         self._refresh_table()
 
     def _build_ui(self):
-        layout = QHBoxLayout(self)
+        """整个页面可滚动：参数定义（上）+ 新增参数（下），上下堆叠"""
+        # 外层滚动区域
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        # 内容容器
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # 左卡：参数表
+        # 上卡：参数定义表格（表格内部可滚动，卡片本身按内容高度）
         left = self._build_left_card()
-        layout.addWidget(left, 3)
+        layout.addWidget(left)
 
-        # 右卡：编辑表单
+        # 下卡：编辑表单（按内容高度，字段间距充足不挤）
         right = self._build_right_card()
-        layout.addWidget(right, 2)
+        layout.addWidget(right)
+
+        layout.addStretch()
+
+        scroll.setWidget(content)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
 
     # ===== 左卡 =====
 
@@ -106,7 +138,7 @@ class ParamsPage(QWidget):
 
         # 设备地址
         toolbar.addWidget(QLabel("设备地址"))
-        self.slave_input = QSpinBox()
+        self.slave_input = NoWheelSpinBox()
         self.slave_input.setRange(1, 247)
         self.slave_input.setValue(store.slave_id)
         self.slave_input.setFixedWidth(70)
@@ -115,14 +147,14 @@ class ParamsPage(QWidget):
 
         # 分类筛选
         toolbar.addWidget(QLabel("分类筛选"))
-        self.filter_combo = QComboBox()
+        self.filter_combo = NoWheelComboBox()
         self.filter_combo.addItems(["全部", "采样参数", "配置参数"])
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         toolbar.addWidget(self.filter_combo)
 
         body_layout.addLayout(toolbar)
 
-        # 参数表
+        # 参数表（固定高度，行多了内部滚动）
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
@@ -132,6 +164,9 @@ class ParamsPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.itemChanged.connect(self._on_table_item_changed)
+        # 固定高度（约 8 行可见 + 表头），超出滚动
+        self.table.setMinimumHeight(210)
+        self.table.setMaximumHeight(210)
         body_layout.addWidget(self.table)
 
         card_layout.addWidget(body, 1)
@@ -159,37 +194,61 @@ class ParamsPage(QWidget):
         card_layout.addWidget(head)
 
         body = QWidget()
-        form = QFormLayout(body)
-        form.setContentsMargins(10, 10, 10, 10)
-        form.setSpacing(8)
+        from PySide6.QtWidgets import QGridLayout
+        form = QGridLayout(body)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setVerticalSpacing(14)
+        form.setHorizontalSpacing(12)
+        form.setColumnStretch(0, 1)
+        form.setColumnStretch(1, 1)
 
         self.f_name = QLineEdit()
         self.f_display = QLineEdit()
         self.f_address = QLineEdit()
-        self.f_category = QComboBox()
+        self.f_category = NoWheelComboBox()
         self.f_category.addItems(CATEGORIES)
-        self.f_type = QComboBox()
+        self.f_type = NoWheelComboBox()
         self.f_type.addItems(TYPES)
-        self.f_access = QComboBox()
+        self.f_access = NoWheelComboBox()
         self.f_access.addItems(ACCESSES)
         self.f_unit = QLineEdit()
-        self.f_decimals = QSpinBox()
+        self.f_decimals = NoWheelSpinBox()
         self.f_decimals.setRange(0, 10)
         self.f_min = QLineEdit()
         self.f_max = QLineEdit()
         self.f_desc = QLineEdit()
 
-        form.addRow("参数名", self.f_name)
-        form.addRow("显示名", self.f_display)
-        form.addRow("Modbus 地址", self.f_address)
-        form.addRow("参数分类", self.f_category)
-        form.addRow("数据类型", self.f_type)
-        form.addRow("访问权限", self.f_access)
-        form.addRow("单位", self.f_unit)
-        form.addRow("小数位数", self.f_decimals)
-        form.addRow("最小值", self.f_min)
-        form.addRow("最大值", self.f_max)
-        form.addRow("说明", self.f_desc)
+        def field(label_text: str, widget) -> QWidget:
+            """创建 label 在上、input 在下的字段组件（对应原型 .field）"""
+            f = QWidget()
+            lay = QVBoxLayout(f)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(4)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; font-weight: {theme.FW_BOLD};")
+            lay.addWidget(lbl)
+            lay.addWidget(widget)
+            return f
+
+        # 两列布局（原型 form-grid：每行 2 个字段，label 在上 input 在下）
+        row = 0
+        form.addWidget(field("参数名", self.f_name), row, 0)
+        form.addWidget(field("显示名", self.f_display), row, 1)
+        row += 1
+        form.addWidget(field("Modbus 地址", self.f_address), row, 0)
+        form.addWidget(field("参数分类", self.f_category), row, 1)
+        row += 1
+        form.addWidget(field("数据类型", self.f_type), row, 0)
+        form.addWidget(field("访问权限", self.f_access), row, 1)
+        row += 1
+        form.addWidget(field("单位", self.f_unit), row, 0)
+        form.addWidget(field("小数位数", self.f_decimals), row, 1)
+        row += 1
+        form.addWidget(field("最小值", self.f_min), row, 0)
+        form.addWidget(field("最大值", self.f_max), row, 1)
+        row += 1
+        form.addWidget(field("说明（可选）", self.f_desc), row, 0, 1, 2)
+        row += 1
 
         # 按钮
         btn_row = QHBoxLayout()
@@ -205,7 +264,7 @@ class ParamsPage(QWidget):
         btn_row.addWidget(self.btn_validate)
         btn_row.addWidget(self.btn_cancel)
         btn_row.addStretch()
-        form.addRow(btn_row)
+        form.addLayout(btn_row, row, 0, 1, 4)
 
         card_layout.addWidget(body, 1)
         return card
