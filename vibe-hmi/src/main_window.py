@@ -16,6 +16,7 @@ from .page_registry import PAGES, get_page
 from .sidebar import Sidebar
 from .main_area import MainArea
 from .pages.placeholder import PlaceholderPage
+from .pages.params_page import ParamsPage
 
 
 class MainWindow(QMainWindow):
@@ -133,16 +134,19 @@ class MainWindow(QMainWindow):
         self.main_area = MainArea()
         lay.addWidget(self.main_area, 1)
 
-        # 注册所有页面（占位，后续票替换）
-        # page_id → (页面名, 对应票号)
+        # 注册所有页面
+        # 已实现的页面用真实 widget，其余用占位
         ticket_map = {
             "overview": "票07", "serial": "票06", "monitor": "票05",
-            "statusPolicy": "票07", "params": "票04", "alarms": "票07",
+            "statusPolicy": "票07", "alarms": "票07",
             "history": "票08", "settings": "票07", "aiAssistant": "票09",
             "modelConfig": "票09",
         }
         for page in PAGES:
-            widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
+            if page.page_id == "params":
+                widget = ParamsPage()
+            else:
+                widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
             self.main_area.add_page(page.page_id, widget)
 
         # 默认显示首页
