@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Qt, QEvent
 from . import theme
+from .icons import get_icon_pixmap, get_active_icon_pixmap
 from .page_registry import PAGES, GROUPS, PageMeta
 
 
@@ -29,11 +30,12 @@ class TreeItem(QFrame):
         layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(7)
 
-        # 列1：图标（固定宽 18px，对应原型 grid 18px）
-        self.icon_label = QLabel(meta.icon)
+        # 列1：图标（SVG 渲染成 QPixmap，固定宽 18px）
+        self.icon_label = QLabel()
         self.icon_label.setObjectName("tree-icon")
-        self.icon_label.setFixedWidth(18)
+        self.icon_label.setFixedSize(18, 18)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=18))
 
         # 列2：名称（弹性）
         self.name_label = QLabel(meta.name)
@@ -79,13 +81,24 @@ class TreeItem(QFrame):
         super().mouseReleaseEvent(event)
 
     def set_active(self, active: bool):
-        """设置 active 态（高亮）"""
+        """设置 active 态（高亮）：切换图标颜色 + QSS 高亮"""
         self.setProperty("active", "true" if active else "false")
+        # active 时图标变主色蓝，否则 muted 灰
+        if active:
+            self.icon_label.setPixmap(get_active_icon_pixmap(self.page_id, size=18))
+        else:
+            from .page_registry import get_page
+            meta = get_page(self.page_id)
+            if meta:
+                self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=18))
         self.style().polish(self)
 
 
-class Sidebar(QWidget):
-    """侧边栏：pane-title + 三组树导航"""
+class Sidebar(QFrame):
+    """侧边栏：pane-title + 三组树导航
+
+    继承 QFrame 确保 QSS background 可靠填充。
+    """
 
     page_clicked = Signal(str)
 

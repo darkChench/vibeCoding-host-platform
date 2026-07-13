@@ -13,8 +13,11 @@ from . import theme
 from .page_registry import PAGES
 
 
-class MainArea(QWidget):
-    """主区：tabs 行 + 内容区（QStackedWidget）"""
+class MainArea(QFrame):
+    """主区：tabs 行 + 内容区（QStackedWidget）
+
+    继承 QFrame（而非 QWidget）以确保 QSS background 可靠填充。
+    """
 
     def __init__(self):
         super().__init__()

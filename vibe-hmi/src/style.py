@@ -124,12 +124,12 @@ def build_qss() -> str:
     }}
 
     /* ===== 工作区 ===== */
-    QFrame#workspace {{
+    #workspace {{
         background: {c["WORKSPACE_BG"]};
     }}
 
     /* ===== 侧边栏 ===== */
-    QWidget#sidebar {{
+    #sidebar {{
         background: {c["SIDEBAR_BG"]};
         border-right: 1px solid {c["LINE"]};
     }}
@@ -180,8 +180,9 @@ def build_qss() -> str:
         font-weight: {theme.FW_BOLD};
     }}
     QLabel#tree-tag {{
-        border-radius: {r["pill"]}px;
-        padding: 2px 7px;
+        border-radius: 10px;
+        padding: 3px 8px;
+        min-height: 16px;
         background: {c["TAG_BG"]};
         color: {c["TAG_FG"]};
         font-size: {theme.FS_XS}pt;
@@ -197,9 +198,15 @@ def build_qss() -> str:
     }}
 
     /* ===== 主区 tabs ===== */
-    QFrame#main-area {{
+    #main-area {{
         background: #ffffff;
         border-right: 1px solid {c["LINE"]};
+    }}
+    #main-area QStackedWidget {{
+        background: #ffffff;
+    }}
+    #main-area QStackedWidget > * {{
+        background: #ffffff;
     }}
     QScrollArea#tabs-scroll {{
         background: #f7f9fc;
