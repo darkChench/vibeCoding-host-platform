@@ -28,14 +28,14 @@ class TreeItem(QFrame):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(7)
+        layout.setSpacing(12)
 
-        # 列1：图标（SVG 渲染成 QPixmap，固定宽 18px）
+        # 列1：图标（SVG 渲染成 QPixmap）
         self.icon_label = QLabel()
         self.icon_label.setObjectName("tree-icon")
-        self.icon_label.setFixedSize(18, 18)
+        self.icon_label.setFixedSize(20, 20)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=18))
+        self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=16))
 
         # 列2：名称（弹性）
         self.name_label = QLabel(meta.name)
@@ -85,12 +85,12 @@ class TreeItem(QFrame):
         self.setProperty("active", "true" if active else "false")
         # active 时图标变主色蓝，否则 muted 灰
         if active:
-            self.icon_label.setPixmap(get_active_icon_pixmap(self.page_id, size=18))
+            self.icon_label.setPixmap(get_active_icon_pixmap(self.page_id, size=16))
         else:
             from .page_registry import get_page
             meta = get_page(self.page_id)
             if meta:
-                self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=18))
+                self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=16))
         self.style().polish(self)
 
 

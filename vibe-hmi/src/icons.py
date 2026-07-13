@@ -102,9 +102,12 @@ _ICONS: dict[str, str] = {
 def get_icon_pixmap(icon_key: str, size: int = 18, color: str | None = None) -> QPixmap:
     """渲染 SVG 图标为 QPixmap。
 
+    用 render(painter, QRectF) 指定内缩渲染区域，给 stroke 描边留余量不被裁。
+    QRectF 用逻辑坐标（painter 已设 devicePixelRatio）。
+
     Args:
         icon_key: 图标键（如 'dashboard'）
-        size: 像素尺寸（默认 18，和原型 tree-icon 18px 一致）
+        size: 最终显示像素尺寸（默认 18）
         color: 颜色（默认用 theme.MUTED）
     Returns:
         QPixmap，失败返回空 pixmap
@@ -123,15 +126,21 @@ def get_icon_pixmap(icon_key: str, size: int = 18, color: str | None = None) -> 
     if not renderer.isValid():
         return QPixmap()
 
-    # 用 devicePixelRatio 实现高清渲染
     from PySide6.QtGui import QGuiApplication
+    from PySide6.QtCore import QRectF
     dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+
+    # pixmap 物理尺寸 = size * dpr，逻辑尺寸 = size
     pixmap = QPixmap(int(size * dpr), int(size * dpr))
     pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.GlobalColor.transparent)
 
+    # 渲染区域内缩 3 逻辑像素（每边），给 stroke-width=2 的溢出留余量
+    pad = 3.0
+    rect = QRectF(pad, pad, size - pad * 2, size - pad * 2)
+
     painter = QPainter(pixmap)
-    renderer.render(painter)
+    renderer.render(painter, rect)
     painter.end()
 
     return pixmap
