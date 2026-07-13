@@ -158,13 +158,16 @@ class ParamsPage(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 34)
+        # Interactive 模式：列宽固定，超出时横向滚动
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # 各列固定宽度（第一列复选框 40px，其余按内容给合理宽度）
+        col_widths = [40, 120, 90, 80, 90, 80, 60, 60, 50, 120, 150]
+        for i, w in enumerate(col_widths):
+            self.table.setColumnWidth(i, w)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.itemChanged.connect(self._on_table_item_changed)
-        # 固定高度（约 8 行可见 + 表头），超出滚动
+        # 固定高度（约 5 行可见 + 表头），超出纵向滚动
         self.table.setMinimumHeight(210)
         self.table.setMaximumHeight(210)
         body_layout.addWidget(self.table)
@@ -279,10 +282,14 @@ class ParamsPage(QWidget):
         self.table.setRowCount(len(params))
 
         for row, p in enumerate(params):
-            # checkbox
+            # checkbox（居中放在 container 里，不被裁切）
+            cb_container = QWidget()
+            cb_layout = QHBoxLayout(cb_container)
+            cb_layout.setContentsMargins(0, 0, 0, 0)
+            cb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cb = QCheckBox()
-            cb.setStyleSheet("margin-left:10px;")
-            self.table.setCellWidget(row, 0, cb)
+            cb_layout.addWidget(cb)
+            self.table.setCellWidget(row, 0, cb_container)
             # 数据列
             vals = [p.get("name",""), p.get("display",""), p.get("address",""),
                     p.get("category",""), p.get("type",""), p.get("access",""),
@@ -301,9 +308,11 @@ class ParamsPage(QWidget):
         """获取勾选的行号"""
         rows = []
         for row in range(self.table.rowCount()):
-            cb = self.table.cellWidget(row, 0)
-            if cb and cb.isChecked():
-                rows.append(row)
+            container = self.table.cellWidget(row, 0)
+            if container:
+                cb = container.findChild(QCheckBox)
+                if cb and cb.isChecked():
+                    rows.append(row)
         return rows
 
     def _update_toolbar_state(self):
