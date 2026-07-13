@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QStackedWidget, QFrame, QScrollArea,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from . import theme
 from .page_registry import PAGES
 
@@ -18,6 +18,9 @@ class MainArea(QFrame):
 
     继承 QFrame（而非 QWidget）以确保 QSS background 可靠填充。
     """
+
+    # 点击 tab 时发射 page_id
+    page_clicked = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -52,6 +55,7 @@ class MainArea(QFrame):
             tab_btn.setObjectName("tab")
             tab_btn.setCheckable(True)
             tab_btn.setFlat(True)
+            tab_btn.clicked.connect(lambda checked=False, pid=page.page_id: self.page_clicked.emit(pid))
             tabs_layout.insertWidget(tabs_layout.count() - 1, tab_btn)  # 插到 stretch 前
             self._tab_buttons[page.page_id] = tab_btn
 

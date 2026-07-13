@@ -96,8 +96,10 @@ class ParamsPage(QWidget):
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(10, 0, 10, 0)
         title = QLabel("Modbus RTU 参数定义")
+        title.setObjectName("card-title")
         self.dirty_tag = QLabel("已同步")
         self.dirty_tag.setObjectName("tag")
+        self.dirty_tag.setFixedHeight(18)
         head_layout.addWidget(title)
         head_layout.addStretch()
         head_layout.addWidget(self.dirty_tag)
@@ -166,6 +168,7 @@ class ParamsPage(QWidget):
             self.table.setColumnWidth(i, w)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 禁用焦点虚线框
         self.table.itemChanged.connect(self._on_table_item_changed)
         # 固定高度（约 5 行可见 + 表头），超出纵向滚动
         self.table.setMinimumHeight(210)
@@ -189,8 +192,10 @@ class ParamsPage(QWidget):
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(10, 0, 10, 0)
         self.form_title = QLabel("新增参数")
+        self.form_title.setObjectName("card-title")
         form_tag = QLabel("表单")
         form_tag.setObjectName("tag")
+        form_tag.setFixedHeight(18)
         head_layout.addWidget(self.form_title)
         head_layout.addStretch()
         head_layout.addWidget(form_tag)
@@ -215,8 +220,8 @@ class ParamsPage(QWidget):
         self.f_access = NoWheelComboBox()
         self.f_access.addItems(ACCESSES)
         self.f_unit = QLineEdit()
-        self.f_decimals = NoWheelSpinBox()
-        self.f_decimals.setRange(0, 10)
+        self.f_decimals = QLineEdit()
+        self.f_decimals.setPlaceholderText("0")
         self.f_min = QLineEdit()
         self.f_max = QLineEdit()
         self.f_desc = QLineEdit()
@@ -255,6 +260,7 @@ class ParamsPage(QWidget):
 
         # 按钮
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         self.btn_save = QPushButton("保存定义")
         self.btn_validate = QPushButton("校验定义")
         self.btn_validate.setProperty("variant", "secondary")
@@ -358,7 +364,7 @@ class ParamsPage(QWidget):
         self.f_type.setCurrentIndex(0)
         self.f_access.setCurrentIndex(0)
         self.f_unit.clear()
-        self.f_decimals.setValue(0)
+        self.f_decimals.setText("0")
         self.f_min.clear()
         self.f_max.clear()
         self.f_desc.clear()
@@ -371,7 +377,7 @@ class ParamsPage(QWidget):
         self.f_type.setCurrentText(p.get("type", "uint16"))
         self.f_access.setCurrentText(p.get("access", "只读"))
         self.f_unit.setText(p.get("unit", ""))
-        self.f_decimals.setValue(int(p.get("decimals", 0)))
+        self.f_decimals.setText(str(p.get("decimals", 0)))
         self.f_min.setText(str(p.get("min", "")))
         self.f_max.setText(str(p.get("max", "")))
         self.f_desc.setText(p.get("desc", ""))
@@ -385,7 +391,7 @@ class ParamsPage(QWidget):
             "type": self.f_type.currentText(),
             "access": self.f_access.currentText(),
             "unit": self.f_unit.text().strip(),
-            "decimals": self.f_decimals.value(),
+            "decimals": int(self.f_decimals.text() or 0),
             "min": self.f_min.text().strip(),
             "max": self.f_max.text().strip(),
             "desc": self.f_desc.text().strip(),

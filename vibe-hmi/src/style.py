@@ -11,6 +11,11 @@ from . import theme
 
 def build_qss() -> str:
     """生成全局 QSS 字符串"""
+    import os
+    # 箭头 SVG 的绝对路径（相对本文件定位）
+    arrow_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "arrow-down.svg")
+    arrow_path = arrow_path.replace("\\", "/")  # QSS 用正斜杠
+
     c = theme.HEX
     r = {
         "xs": theme.RADIUS_XS,
@@ -103,7 +108,7 @@ def build_qss() -> str:
     }}
 
     /* ===== 输入框 / 下拉框 ===== */
-    QLineEdit, QComboBox {{
+    QLineEdit {{
         min-height: {theme.CONTROL_H}px;
         padding: 0 9px;
         border: 1px solid {c["LINE_DARK"]};
@@ -111,6 +116,55 @@ def build_qss() -> str:
         background: #ffffff;
         color: {c["TEXT"]};
         font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QLineEdit:focus {{
+        border-color: {c["PRIMARY"]};
+    }}
+    /* QComboBox：保留边框/圆角/focus，箭头用系统原生（不设 drop-down/down-arrow） */
+    QComboBox {{
+        min-height: {theme.CONTROL_H}px;
+        padding: 0 9px;
+        border: 1px solid {c["LINE_DARK"]};
+        border-radius: {r["sm"]}px;
+        background: #ffffff;
+        color: {c["TEXT"]};
+        font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QComboBox:focus {{
+        border-color: {c["PRIMARY"]};
+    }}
+    QComboBox:hover {{
+        border-color: {c["PRIMARY"]};
+    }}
+    /* 下拉箭头（本地 SVG 文件） */
+    QComboBox::drop-down {{
+        border: none;
+        width: 24px;
+    }}
+    QComboBox::down-arrow {{
+        image: url({arrow_path});
+        width: 12px;
+        height: 8px;
+    }}
+    /* 下拉弹窗（不设 border-radius/padding，避免弹出时抖动） */
+    QComboBox QAbstractItemView {{
+        border: 1px solid {c["LINE_DARK"]};
+        background: #ffffff;
+        outline: none;
+    }}
+    QComboBox QAbstractItemView::item {{
+        min-height: 28px;
+        padding: 0 10px;
+    }}
+    QComboBox QAbstractItemView::item:hover {{
+        background: {c["SELECT_BG"]};
+        color: {c["PRIMARY"]};
+    }}
+    QComboBox QAbstractItemView::item:selected {{
+        background: {c["SELECT_BG"]};
+        color: {c["PRIMARY"]};
         font-weight: {theme.FW_BOLD};
     }}
     QLineEdit:focus {{
@@ -147,6 +201,10 @@ def build_qss() -> str:
         border-bottom: 1px solid {c["LINE"]};
         font-weight: {theme.FW_BOLD};
     }}
+    QLabel#card-title {{
+        font-size: {theme.FS_LG}pt;
+        font-weight: {theme.FW_BLACK};
+    }}
 
     /* ===== 表格 ===== */
     QTableWidget {{
@@ -159,12 +217,14 @@ def build_qss() -> str:
     QTableWidget::item {{
         padding: 6px 8px;
         border-bottom: 1px solid {c["LINE"]};
+        outline: none;
     }}
     QTableWidget::item:hover {{
         background: {c["ROW_HOVER_BG"]};
     }}
     QTableWidget::item:selected {{
         background: {c["SELECT_BG"]};
+        color: {c["PRIMARY_DARK"]};
     }}
     QHeaderView::section {{
         background: {c["TH_BG"]};
@@ -178,8 +238,8 @@ def build_qss() -> str:
     /* ===== 标签 tag ===== */
     QLabel#tag {{
         border-radius: 10px;
-        padding: 3px 8px;
-        min-height: 16px;
+        padding: 2px 8px;
+        min-height: 14px;
         background: {c["TAG_BG"]};
         color: {c["TAG_FG"]};
         font-size: {theme.FS_XS}pt;

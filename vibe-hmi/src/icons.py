@@ -149,3 +149,32 @@ def get_icon_pixmap(icon_key: str, size: int = 18, color: str | None = None) -> 
 def get_active_icon_pixmap(icon_key: str, size: int = 18) -> QPixmap:
     """active 态图标（主色蓝）"""
     return get_icon_pixmap(icon_key, size, theme.HEX["PRIMARY"])
+
+
+_ARROW_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 8" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="1 1.5 6 6 11 1.5"/>
+</svg>'''
+
+
+def get_arrow_pixmap(color: str | None = None, width: int = 12, height: int = 8) -> QPixmap:
+    """生成下拉箭头 QPixmap（V 形）"""
+    from PySide6.QtSvg import QSvgRenderer
+    from PySide6.QtGui import QPixmap, QPainter, QGuiApplication
+    from PySide6.QtCore import QByteArray, Qt
+
+    if color is None:
+        color = theme.HEX["MUTED"]
+
+    svg_str = _ARROW_SVG.replace("{color}", color)
+    renderer = QSvgRenderer(QByteArray(svg_str.encode("utf-8")))
+    if not renderer.isValid():
+        return QPixmap()
+
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+    pm = QPixmap(int(width * dpr), int(height * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    renderer.render(painter)
+    painter.end()
+    return pm

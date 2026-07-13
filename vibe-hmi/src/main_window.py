@@ -132,6 +132,7 @@ class MainWindow(QMainWindow):
 
         # 主区（tabs + 内容）
         self.main_area = MainArea()
+        self.main_area.page_clicked.connect(self.show_page)
         lay.addWidget(self.main_area, 1)
 
         # 注册所有页面
