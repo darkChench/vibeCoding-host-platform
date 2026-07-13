@@ -28,14 +28,14 @@ class TreeItem(QFrame):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(6)
 
         # 列1：图标（SVG 渲染成 QPixmap）
         self.icon_label = QLabel()
         self.icon_label.setObjectName("tree-icon")
-        self.icon_label.setFixedSize(20, 20)
+        self.icon_label.setFixedSize(24, 24)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=16))
+        self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=20))
 
         # 列2：名称（弹性）
         self.name_label = QLabel(meta.name)
@@ -83,14 +83,14 @@ class TreeItem(QFrame):
     def set_active(self, active: bool):
         """设置 active 态（高亮）：切换图标颜色 + QSS 高亮"""
         self.setProperty("active", "true" if active else "false")
-        # active 时图标变主色蓝，否则 muted 灰
-        if active:
-            self.icon_label.setPixmap(get_active_icon_pixmap(self.page_id, size=16))
-        else:
-            from .page_registry import get_page
-            meta = get_page(self.page_id)
-            if meta:
-                self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=16))
+        # 用 page_id 查 meta 拿 icon key，再按 active 态选颜色渲染
+        from .page_registry import get_page
+        meta = get_page(self.page_id)
+        if meta:
+            if active:
+                self.icon_label.setPixmap(get_active_icon_pixmap(meta.icon, size=20))
+            else:
+                self.icon_label.setPixmap(get_icon_pixmap(meta.icon, size=20))
         self.style().polish(self)
 
 
