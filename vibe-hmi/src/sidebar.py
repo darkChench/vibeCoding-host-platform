@@ -149,3 +149,15 @@ class Sidebar(QFrame):
         """高亮指定页面（其他取消高亮）"""
         for pid, item in self._items.items():
             item.set_active(pid == page_id)
+
+    def update_tag(self, page_id: str, text: str, tag_type: str = ""):
+        """动态更新某页面的右侧标签（text + 颜色类型）
+
+        tag_type: "" 默认 / "ok" 绿 / "warn" 橙
+        """
+        item = self._items.get(page_id)
+        if not item:
+            return
+        item.tag_label.setText(text)
+        item.tag_label.setProperty("variant", tag_type)
+        item.tag_label.style().polish(item.tag_label)

@@ -109,8 +109,16 @@ def simulate_read_response(frame: list[int], param: dict) -> dict:
     reg_count = type_to_reg_count(param["type"])
     byte_count = reg_count * 2
 
-    min_val = float(param.get("min", 0))
-    max_val = float(param.get("max", 100))
+    # min/max 可能为空字符串（参数页选填），需容错
+    def _safe_float(val, default):
+        try:
+            return float(val) if val not in ("", None) else default
+        except (ValueError, TypeError):
+            return default
+    min_val = _safe_float(param.get("min", 0), 0)
+    max_val = _safe_float(param.get("max", 100), 100)
+    if min_val > max_val:
+        min_val, max_val = max_val, min_val
     eng_value = min_val + random.random() * (max_val - min_val)
 
     if param["type"] == "float32":

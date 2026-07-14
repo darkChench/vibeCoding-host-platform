@@ -40,6 +40,44 @@ def build_qss() -> str:
         background: #ffffff;
     }}
 
+    /* ===== 滚动条 ===== */
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 10px;
+        margin: 0;
+    }}
+    QScrollBar:horizontal {{
+        background: transparent;
+        height: 10px;
+        margin: 0;
+    }}
+    QScrollBar::handle:vertical,
+    QScrollBar::handle:horizontal {{
+        background: #a8b0bb;
+        border-radius: 4px;
+        min-height: 30px;
+        min-width: 30px;
+    }}
+    QScrollBar::handle:vertical:hover,
+    QScrollBar::handle:horizontal:hover {{
+        background: #8a93a0;
+    }}
+    QScrollBar::handle:vertical:pressed,
+    QScrollBar::handle:horizontal:pressed {{
+        background: #6c7682;
+    }}
+    QScrollBar::add-line,
+    QScrollBar::sub-line {{
+        background: none;
+        border: none;
+        height: 0px;
+        width: 0px;
+    }}
+    QScrollBar::add-page,
+    QScrollBar::sub-page {{
+        background: transparent;
+    }}
+
     /* ===== 原生菜单栏 ===== */
     QMenuBar {{
         background: {c["MENUBAR_BG"]};
@@ -211,11 +249,10 @@ def build_qss() -> str:
         border: 1px solid {c["LINE"]};
         border-radius: {r["md"]}px;
         background: #ffffff;
-        gridline-color: {c["LINE"]};
+        gridline-color: transparent;
         font-size: {theme.FS_MD}pt;
     }}
     QTableWidget::item {{
-        padding: 6px 8px;
         border-bottom: 1px solid {c["LINE"]};
         outline: none;
     }}
@@ -230,7 +267,7 @@ def build_qss() -> str:
         background: {c["TH_BG"]};
         color: {c["TH_FG"]};
         font-weight: {theme.FW_BOLD};
-        padding: 6px 8px;
+        padding: 6px 4px;
         border: none;
         border-bottom: 1px solid {c["LINE"]};
     }}
@@ -363,5 +400,51 @@ def build_qss() -> str:
         background: #ffffff;
         color: {c["PRIMARY"]};
         border-color: {c["SELECT_BORDER_TAB"]};
+    }}
+
+    /* ===== 监控页 ===== */
+    QFrame#metric {{
+        border: 1px solid {c["LINE"]};
+        border-radius: {r["md"]}px;
+        background: #f8fafc;
+    }}
+    QLabel#metric-label {{
+        color: {c["MUTED"]};
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QLabel#metric-value {{
+        font-size: {theme.FS_XL}pt;
+        font-weight: {theme.FW_BLACK};
+    }}
+    QFrame#curve-chip {{
+        border: 1px solid {c["LINE"]};
+        border-radius: 13px;
+        background: #f8fafc;
+    }}
+    QFrame#status-chip {{
+        border: 1px solid {c["TAG_OK_BG"]};
+        border-radius: 13px;
+        background: {c["TAG_OK_BG"]};
+    }}
+    QFrame#curve-chip[hidden="true"] {{
+        border-style: dashed;
+        border-color: {c["LINE"]};
+        background: #f1f5f9;
+    }}
+    QFrame#curve-chip:hover {{
+        border-color: {c["PRIMARY"]};
+        background: {c["SELECT_BG"]};
+    }}
+    QLabel#chip-text {{
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BOLD};
+        background: transparent;
+        border: none;
+    }}
+    QLabel#empty-state {{
+        color: {c["MUTED"]};
+        font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_BOLD};
     }}
     """

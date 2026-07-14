@@ -219,3 +219,6 @@ __marimo__/
 
 # ZCode tool temp
 .zcode/
+
+# PySide6 app runtime config (用户编辑生成的持久化文件)
+vibe-hmi/config/

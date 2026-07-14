@@ -12,11 +12,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from . import theme
+from .store import store
 from .page_registry import PAGES, get_page
 from .sidebar import Sidebar
 from .main_area import MainArea
 from .pages.placeholder import PlaceholderPage
 from .pages.params_page import ParamsPage
+from .pages.monitor_page import MonitorPage
 
 
 class MainWindow(QMainWindow):
@@ -30,6 +32,12 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._build_statusbar()
         self._build_central()
+        self._sync_monitor_tag()  # 启动时同步侧边栏"实时监控"标签
+
+    def _sync_monitor_tag(self):
+        """同步侧边栏"实时监控"标签为当前采样参数数量"""
+        count = len(store.sample_params())
+        self.sidebar.update_tag("monitor", f"{count} 点", "ok" if count > 0 else "warn")
 
     def _build_menu(self):
         """原生菜单栏：文件/连接/设备/数据/工具/帮助"""
@@ -146,9 +154,23 @@ class MainWindow(QMainWindow):
         for page in PAGES:
             if page.page_id == "params":
                 widget = ParamsPage()
+                # 表单 dirty 状态 → 同步侧边栏标签
+                widget.dirty_changed.connect(
+                    lambda dirty: self.sidebar.update_tag(
+                        "params",
+                        "未保存" if dirty else "已同步",
+                        "warn" if dirty else "ok",
+                    )
+                )
+                # 参数表保存/删除后 → 刷新监控页（采样参数增删联动）
+                widget.dirty_changed.connect(self._on_params_maybe_changed)
+            elif page.page_id == "monitor":
+                widget = MonitorPage()
             else:
                 widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
             self.main_area.add_page(page.page_id, widget)
+            if page.page_id == "monitor":
+                self.monitor_page = widget
 
         # 默认显示首页
         self.show_page("overview")
@@ -164,6 +186,19 @@ class MainWindow(QMainWindow):
         # 状态栏当前页
         self.lbl_current_page.setText(meta.name)
         self._current_page_id = page_id
+
+    def _on_params_maybe_changed(self, dirty: bool):
+        """参数表 dirty 变为 False（保存/删除完成）时刷新监控页
+
+        只在 dirty→False 的边沿触发（即真正的写盘动作），
+        避免用户在表单里输入时频繁重建。
+        """
+        if dirty:
+            return
+        mp = getattr(self, "monitor_page", None)
+        if mp:
+            mp.refresh_params()
+        self._sync_monitor_tag()
 
     def _build_statusbar(self):
         """原生状态栏"""

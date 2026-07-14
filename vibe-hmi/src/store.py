@@ -46,9 +46,11 @@ class Store:
         self.params: list[dict] = []
         self.params_dirty: bool = False
         self.param_filter: str = "all"  # 'all' | '采样参数' | '配置参数'
+        # 曲线显隐：{param_name: bool}，缺省视为 True（显示）
+        self.curve_visible: dict[str, bool] = {}
 
         # 连接状态
-        self.connection_state: str = "disconnected"
+        self.connection_state: str = "connected"
         self.slave_id: int = 1
         self.current_port: str = "COM3"
 
@@ -96,6 +98,10 @@ class Store:
                 return p
         return None
 
+    def get_curve_visible(self, name: str) -> bool:
+        """取某采样参数曲线是否显示（缺省 True）"""
+        return self.curve_visible.get(name, True)
+
     def validate_param(self, data: dict, exclude_name: str = None) -> dict:
         """校验参数定义，返回 {ok: bool, errors: {field: msg}}"""
         errors = {}
@@ -111,8 +117,14 @@ class Store:
                     errors["name"] = f'参数名 "{name}" 已存在'
                     break
 
+        # 显示名必填
+        if not data.get("display", "").strip():
+            errors["display"] = "显示名不能为空"
+
         address = data.get("address", "").strip()
-        if not address.startswith("0x"):
+        if not address:
+            errors["address"] = "地址不能为空"
+        elif not address.startswith("0x"):
             errors["address"] = "地址格式应为 0x0000~0xFFFF"
         else:
             try:
@@ -133,6 +145,10 @@ class Store:
         if data.get("access") not in ("只读", "只写", "读写"):
             errors["access"] = "访问权限非法"
 
+        # 单位必填
+        if not data.get("unit", "").strip():
+            errors["unit"] = "单位不能为空"
+
         try:
             decimals = int(data.get("decimals", 0))
             if decimals < 0:
@@ -140,13 +156,7 @@ class Store:
         except (ValueError, TypeError):
             errors["decimals"] = "小数位须为整数"
 
-        try:
-            min_val = float(data.get("min", 0))
-            max_val = float(data.get("max", 100))
-            if min_val > max_val:
-                errors["max"] = "最大值不能小于最小值"
-        except (ValueError, TypeError):
-            errors["max"] = "范围值须为数字"
+        # 最小值/最大值/说明不校验（选填）
 
         return {"ok": len(errors) == 0, "errors": errors}
 
