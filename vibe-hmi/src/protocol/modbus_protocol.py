@@ -148,6 +148,11 @@ def parse_read_response(resp: list[int], param: dict) -> dict:
     data_bytes = resp[3:3 + reg_count * 2]
     decimals = int(param.get("decimals", 0))
 
+    # 数据长度不足时补零（真实设备可能返回不完整的帧）
+    expected = reg_count * 2
+    if len(data_bytes) < expected:
+        data_bytes = list(data_bytes) + [0] * (expected - len(data_bytes))
+
     if param["type"] == "float32":
         raw_value = bytes_to_float32(data_bytes)
         eng_value = round(raw_value, decimals)
@@ -173,11 +178,16 @@ class ModbusProtocol:
         self.slave_id = slave_id
         self.connection_state = connection_state
         self._use_mock = False  # mock transport 开关
+        self._serial_manager = None  # 串口管理器（注入后走真实/模拟串口）
         self._log_callback = None  # 日志回调（接串口控制台，由调用方注入）
 
     def set_mock_transport(self, enabled: bool):
         """启用/禁用模拟回包（原型阶段用 True，PySide6 阶段用真实 pymodbus）"""
         self._use_mock = enabled
+
+    def set_serial_transport(self, serial_manager):
+        """注入串口管理器，协议层收发走 serial_manager.transact()"""
+        self._serial_manager = serial_manager
 
     def set_log_callback(self, callback):
         """注入日志回调：callback(direction, label, content) → None"""
@@ -188,9 +198,30 @@ class ModbusProtocol:
             self._log_callback(direction, label, content)
 
     def _transact_once(self, frame: list[int], param: dict | None, is_write: bool) -> dict:
-        """单次收发（模拟）：可能正常/超时/CRC错"""
-        self._log("tx", "TX", " ".join(f"{b:02X}" for b in frame))
+        """单次收发。
 
+        优先级：serial_manager（真实/模拟串口）> _use_mock（纯模拟）。
+        可能返回：ok / timeout / crc_error。
+        """
+        hex_frame = " ".join(f"{b:02X}" for b in frame)
+        self._log("tx", "TX", hex_frame)
+
+        # 有串口管理器 → 走真实/模拟串口收发
+        if self._serial_manager and self._serial_manager.is_connected:
+            resp_bytes = self._serial_manager.transact(bytes(frame))
+            if resp_bytes is None or len(resp_bytes) == 0:
+                self._log("rx", "TIMEOUT", f"等待 {CONFIG['timeout_ms']}ms 无响应")
+                return {"type": "timeout"}
+            resp = list(resp_bytes)
+            hex_resp = " ".join(f"{b:02X}" for b in resp)
+            self._log("rx", "RX", hex_resp)
+            # CRC 校验
+            if not verify_crc(resp):
+                self._log("rx", "CRC", "回包校验失败")
+                return {"type": "crc_error", "resp": resp}
+            return {"type": "ok", "resp": resp}
+
+        # 纯模拟模式（无串口管理器）
         # 模拟无响应
         if random.random() < CONFIG["no_response_rate"]:
             time.sleep(CONFIG["timeout_ms"] / 1000)
@@ -263,6 +294,88 @@ class ModbusProtocol:
                 return {"ok": False, "error": last_error, "retried": retried}
 
         return {"ok": False, "error": last_error or "未知错误", "retried": retried}
+
+    def read_params_batch(self, params: list[dict]) -> dict:
+        """批量读取多个参数。连续地址的参数合并成一次 Modbus 读请求。
+
+        将参数按地址排序，连续地址（或间隔很小）的参数分成一组，
+        每组只发一条读请求（功能码 03），从响应中按偏移提取每个参数值。
+        大幅减少报文数量（4 个参数从 4 条请求 → 可能只 1~2 条）。
+
+        返回 {param_name: {"ok": bool, "value": float, "error": str}}
+        """
+        if self.connection_state != "connected":
+            return {p["name"]: {"ok": False, "value": 0.0, "error": "串口未连接"} for p in params}
+
+        if not params:
+            return {}
+
+        # 按地址排序
+        sorted_params = sorted(params, key=lambda p: int(p["address"], 16))
+
+        # 分组：地址连续（前一个的末地址 >= 后一个的起始地址 - 间隔阈值）的合并
+        # 间隔阈值：允许小间隔（如 2 寄存器以内）也合并，减少请求次数
+        GAP_THRESHOLD = 4  # 寄存器间隔 <= 4 也合并
+        groups: list[list[dict]] = []
+        for p in sorted_params:
+            addr = int(p["address"], 16)
+            regs = type_to_reg_count(p["type"])
+            end = addr + regs
+            if groups:
+                last_p = groups[-1][-1]
+                last_end = int(last_p["address"], 16) + type_to_reg_count(last_p["type"])
+                if addr - last_end <= GAP_THRESHOLD:
+                    groups[-1].append(p)
+                    continue
+            groups.append([p])
+
+        # 每组发一次读请求
+        result = {}
+        for idx, group in enumerate(groups):
+            # 两组之间间隔 300ms（避免连续请求太快导致设备处理不过来）
+            if idx > 0:
+                time.sleep(0.3)
+            start_addr = int(group[0]["address"], 16)
+            last_p = group[-1]
+            total_regs = int(last_p["address"], 16) + type_to_reg_count(last_p["type"]) - start_addr
+
+            # Modbus 单次最多读 125 寄存器
+            total_regs = min(total_regs, 125)
+
+            frame = build_read_frame(self.slave_id, group[0]["address"], total_regs)
+            transact_result = self._transact_once(frame, None, is_write=False)
+
+            if transact_result["type"] != "ok":
+                # 整组失败
+                err = "超时" if transact_result["type"] == "timeout" else "CRC 错误"
+                for p in group:
+                    result[p["name"]] = {"ok": False, "value": 0.0, "error": err}
+                continue
+
+            resp = transact_result["resp"]
+            if not verify_crc(resp):
+                for p in group:
+                    result[p["name"]] = {"ok": False, "value": 0.0, "error": "CRC 校验失败"}
+                continue
+
+            # 从响应数据区提取每个参数的值
+            # 响应格式：[slave, FC, byteCount, data...]
+            resp_data = resp[3:]  # 去掉 slave/FC/byteCount
+            for p in group:
+                p_addr = int(p["address"], 16)
+                offset = p_addr - start_addr  # 寄存器偏移
+                byte_offset = offset * 2      # 字节偏移
+                reg_count = type_to_reg_count(p["type"])
+                # 构造伪响应给 parse_read_response（它需要 [slave, FC, byteCount, data...]）
+                p_data = resp_data[byte_offset:byte_offset + reg_count * 2]
+                if len(p_data) < reg_count * 2:
+                    result[p["name"]] = {"ok": False, "value": 0.0, "error": "数据长度不足"}
+                    continue
+                fake_resp = [self.slave_id, FC_READ_HOLDING, reg_count * 2] + list(p_data)
+                parsed = parse_read_response(fake_resp, p)
+                result[p["name"]] = {"ok": True, "value": parsed["eng_value"], "error": ""}
+
+        return result
 
     def write_param(self, param: dict, eng_value: float) -> dict:
         """写入单个参数（功能码 06）。含断线检测、超时重试、echo 校验。"""

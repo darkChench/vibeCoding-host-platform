@@ -10,15 +10,17 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QComboBox, QSizePolicy,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from . import theme
 from .store import store
 from .page_registry import PAGES, get_page
 from .sidebar import Sidebar
 from .main_area import MainArea
+from .serial.serial_manager import serial_manager
 from .pages.placeholder import PlaceholderPage
 from .pages.params_page import ParamsPage
 from .pages.monitor_page import MonitorPage
+from .pages.serial_page import SerialPage
 
 
 class MainWindow(QMainWindow):
@@ -62,7 +64,7 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self):
         """工具栏：两行（控件行 + 状态行）
 
-        布局太定制（5 下拉 + 2 按钮 + 状态行），用自定义 QFrame 而非原生 QToolBar。
+        串口配置下拉框接真实枚举 + 连接/断开/刷新按钮接 serial_manager。
         """
         toolbar = QFrame()
         toolbar.setObjectName("toolbar")
@@ -74,15 +76,24 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout()
         controls.setSpacing(8)
 
-        controls.addWidget(self._make_tool_group("串口", ["COM3", "COM4", "COM5"]))
-        controls.addWidget(self._make_tool_group("波特率", ["115200", "9600", "57600"]))
-        controls.addWidget(self._make_tool_group("数据位", ["8 bit", "7 bit", "6 bit", "5 bit"]))
-        controls.addWidget(self._make_tool_group("校验位", ["None", "Even", "Odd"]))
-        controls.addWidget(self._make_tool_group("停止位", ["1 bit", "1.5 bit", "2 bit"]))
+        # 串口下拉（枚举真实端口）
+        ports = serial_manager.refresh_ports() or ["COM3", "COM4"]
+        self._combo_port = self._make_tool_combo("串口", ports)
+        controls.addWidget(self._combo_port["group"])
+        self._combo_baud = self._make_tool_combo("波特率", ["115200", "57600", "9600", "4800", "2400"])
+        controls.addWidget(self._combo_baud["group"])
+        self._combo_data = self._make_tool_combo("数据位", ["8 bit", "7 bit", "6 bit", "5 bit"])
+        controls.addWidget(self._combo_data["group"])
+        self._combo_parity = self._make_tool_combo("校验位", ["None", "Even", "Odd"])
+        controls.addWidget(self._combo_parity["group"])
+        self._combo_stop = self._make_tool_combo("停止位", ["1 bit", "1.5 bit", "2 bit"])
+        controls.addWidget(self._combo_stop["group"])
 
-        self.btn_connect = QPushButton("断开")
+        self.btn_connect = QPushButton("连接")
+        self.btn_connect.clicked.connect(self._on_connect_clicked)
         self.btn_refresh = QPushButton("刷新串口")
         self.btn_refresh.setProperty("variant", "secondary")
+        self.btn_refresh.clicked.connect(self._on_refresh_ports)
         controls.addWidget(self.btn_connect)
         controls.addWidget(self.btn_refresh)
         controls.addStretch()
@@ -92,10 +103,10 @@ class MainWindow(QMainWindow):
         stats = QHBoxLayout()
         stats.setSpacing(12)
 
-        self.lbl_conn = QLabel("COM3 已连接")
-        self.lbl_conn.setObjectName("stat-ok")
-        self.lbl_rx = QLabel("RX 12,486 B")
-        self.lbl_tx = QLabel("TX 1,024 B")
+        self.lbl_conn = QLabel("未连接")
+        self.lbl_conn.setObjectName("stat-warn")
+        self.lbl_rx = QLabel("RX 0 B")
+        self.lbl_tx = QLabel("TX 0 B")
         self.lbl_crc = QLabel("CRC 0")
         self.lbl_ai = QLabel("AI 未配置")
         self.lbl_ai.setObjectName("stat-warn")
@@ -105,10 +116,18 @@ class MainWindow(QMainWindow):
         stats.addStretch()
         tlayout.addLayout(stats)
 
+        # 串口状态变化联动
+        serial_manager.connection_changed.connect(self._on_connection_changed)
+
+        # 统计刷新定时器
+        self._stats_timer = QTimer()
+        self._stats_timer.timeout.connect(self._update_stats)
+        self._stats_timer.start(1000)
+
         return toolbar
 
-    def _make_tool_group(self, label_text, items):
-        """工具栏的一个 label + 下拉组合"""
+    def _make_tool_combo(self, label_text, items):
+        """工具栏的一个 label + 下拉组合，返回 {group, combo}"""
         group = QFrame()
         layout = QHBoxLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -123,7 +142,56 @@ class MainWindow(QMainWindow):
         layout.addWidget(label)
         layout.addWidget(combo)
         group.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        return group
+        return {"group": group, "combo": combo}
+
+    # ===== 串口连接操作 =====
+
+    def _on_connect_clicked(self):
+        """连接/断开按钮"""
+        if serial_manager.is_connected:
+            serial_manager.disconnect()
+        else:
+            port = self._combo_port["combo"].currentText()
+            baud = int(self._combo_baud["combo"].currentText())
+            data_bits = int(self._combo_data["combo"].currentText().split()[0])
+            parity_map = {"None": "N", "Even": "E", "Odd": "O"}
+            parity = parity_map.get(self._combo_parity["combo"].currentText(), "N")
+            stop_map = {"1 bit": 1, "1.5 bit": 1.5, "2 bit": 2}
+            stopbits = stop_map.get(self._combo_stop["combo"].currentText(), 1)
+            serial_manager.connect(port, baud, data_bits, parity, stopbits)
+
+    def _on_refresh_ports(self):
+        """刷新串口列表"""
+        ports = serial_manager.refresh_ports()
+        combo = self._combo_port["combo"]
+        current = combo.currentText()
+        combo.clear()
+        combo.addItems(ports if ports else ["COM3", "COM4"])
+        if current in ports:
+            combo.setCurrentText(current)
+
+    def _on_connection_changed(self, connected: bool):
+        """串口连接状态变化 → 更新按钮文字 + 状态行 + store"""
+        if connected:
+            mode = "模拟" if serial_manager.is_mock else "真实"
+            self.btn_connect.setText("断开")
+            self.lbl_conn.setText(f"{self._combo_port['combo'].currentText()} 已连接（{mode}）")
+            self.lbl_conn.setObjectName("stat-ok")
+            store.connection_state = "connected"
+        else:
+            self.btn_connect.setText("连接")
+            self.lbl_conn.setText("未连接")
+            self.lbl_conn.setObjectName("stat-warn")
+            store.connection_state = "disconnected"
+        # 刷新样式（objectName 变化需要 polish）
+        self.lbl_conn.style().polish(self.lbl_conn)
+
+    def _update_stats(self):
+        """定时刷新状态行 RX/TX/CRC 统计"""
+        stats = serial_manager.get_stats()
+        self.lbl_rx.setText(f'RX {stats["rx_bytes"]:,} B')
+        self.lbl_tx.setText(f'TX {stats["tx_bytes"]:,} B')
+        self.lbl_crc.setText(f'CRC {stats["crc_errors"]}')
 
     def _build_workspace(self):
         """工作区：侧边栏 + 主区（含页面路由）"""
@@ -166,6 +234,9 @@ class MainWindow(QMainWindow):
                 widget.dirty_changed.connect(self._on_params_maybe_changed)
             elif page.page_id == "monitor":
                 widget = MonitorPage()
+            elif page.page_id == "serial":
+                widget = SerialPage()
+                self.serial_page = widget
             else:
                 widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
             self.main_area.add_page(page.page_id, widget)

@@ -447,4 +447,99 @@ def build_qss() -> str:
         font-size: {theme.FS_MD}pt;
         font-weight: {theme.FW_BOLD};
     }}
+
+    /* ===== 串口控制台 ===== */
+    QFrame#console {{
+        border: 1px solid {c["LINE"]};
+        border-radius: {r["md"]}px;
+        background: #ffffff;
+    }}
+    QFrame#console-tabs {{
+        min-height: 38px;
+        background: #f7f9fc;
+        border-bottom: 1px solid {c["LINE"]};
+    }}
+    QPushButton#console-tab {{
+        min-height: 28px;
+        padding: 0 9px;
+        border: 1px solid {c["LINE"]};
+        border-radius: {r["sm"]}px;
+        background: #ffffff;
+        color: #344457;
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QPushButton#console-tab[active="true"] {{
+        border-color: {c["PRIMARY"]};
+        background: {c["SELECT_BG"]};
+        color: {c["PRIMARY"]};
+    }}
+    QPlainTextEdit#terminal {{
+        background: #ffffff;
+        color: #17202c;
+        border: none;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: {theme.FS_SM}pt;
+        padding: 8px 10px;
+    }}
+    QFrame#sendbar {{
+        min-height: 42px;
+        background: #f7f9fc;
+        border-top: 1px solid {c["LINE"]};
+    }}
+    QLineEdit#send-input {{
+        min-height: 28px;
+    }}
+    QPushButton#btn-send {{
+        min-height: 28px;
+    }}
+    /* 发送历史浮层 */
+    QFrame#history-popover {{
+        border: 1px solid {c["LINE_DARK"]};
+        border-radius: {r["md"]}px;
+        background: #ffffff;
+    }}
+    QFrame#history-head {{
+        min-height: 34px;
+        background: #f7f9fc;
+        border-bottom: 1px solid {c["LINE"]};
+        color: #405066;
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BLACK};
+    }}
+    QFrame#history-item {{
+        min-height: 30px;
+        border-radius: {r["xs"]}px;
+        background: transparent;
+    }}
+    QFrame#history-item:hover {{
+        background: {c["SELECT_BG"]};
+    }}
+    QPushButton#history-pick {{
+        border: none;
+        background: transparent;
+        color: {c["TEXT"]};
+        font-family: Consolas, "Courier New", monospace;
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BOLD};
+        text-align: left;
+        min-height: 28px;
+    }}
+    QPushButton#history-delete {{
+        border: none;
+        background: transparent;
+        color: {c["MUTED"]};
+        font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_BOLD};
+        min-height: 28px;
+    }}
+    QPushButton#history-delete:hover {{
+        color: {c["DANGER"]};
+    }}
+    QCheckBox#check-label {{
+        font-size: {theme.FS_SM}pt;
+        font-weight: {theme.FW_BOLD};
+        color: {c["TEXT"]};
+        spacing: 4px;
+    }}
     """

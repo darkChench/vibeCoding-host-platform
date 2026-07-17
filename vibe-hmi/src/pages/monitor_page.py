@@ -290,9 +290,9 @@ class MonitorPage(QWidget):
             self._chips[p["name"]] = chip
         hl.addLayout(chip_row)
 
-        # 暂停/继续按钮（冻结曲线，metric 值仍刷新）
-        self._paused = False
-        self.btn_pause = QPushButton("暂停")
+        # 暂停/继续按钮（默认暂停，用户点"开始采样"才启动轮询）
+        self._paused = True
+        self.btn_pause = QPushButton("开始采样")
         self.btn_pause.setObjectName("btn-pause")
         self.btn_pause.setProperty("variant", "secondary")
         self.btn_pause.setFixedHeight(26)
@@ -507,9 +507,14 @@ class MonitorPage(QWidget):
     # ===== 暂停/继续 =====
 
     def _toggle_pause(self):
-        """切换暂停状态：暂停时曲线冻结，metric 值仍实时刷新"""
+        """切换暂停状态：默认暂停，点"开始采样"启动轮询，再点"暂停"停止"""
         self._paused = not self._paused
-        self.btn_pause.setText("继续" if self._paused else "暂停")
+        self.btn_pause.setText("暂停" if not self._paused else "开始采样")
+        # 暂停时停止轮询线程，恢复时重新启动
+        if self._paused:
+            self._stop_worker()
+        else:
+            self._start_worker()
 
     def _clear_chart(self):
         """清空所有曲线数据（趋势 deque + series 点）"""
@@ -536,10 +541,10 @@ class MonitorPage(QWidget):
             self._trend[name].clear()
         for series in self._series.values():
             series.replace([])
-        # 重启轮询线程（用新采样间隔）
+        # 重启轮询线程（用新采样间隔），仅在非暂停状态
         was_running = self._worker is not None and self._worker.isRunning()
         self._stop_worker()
-        if was_running or self.isVisible():
+        if (was_running or self.isVisible()) and not self._paused:
             self._start_worker()
 
     # ===== chip 交互 =====
@@ -556,9 +561,10 @@ class MonitorPage(QWidget):
     # ===== 生命周期 =====
 
     def showEvent(self, event):
-        """页面可见时启动轮询（若已连接且有采样参数）"""
+        """页面可见时启动轮询（仅在非暂停状态）"""
         super().showEvent(event)
-        self._start_worker()
+        if not self._paused:
+            self._start_worker()
 
     def hideEvent(self, event):
         """页面隐藏时停止轮询"""
@@ -586,9 +592,9 @@ class MonitorPage(QWidget):
             self._worker = None
 
     def refresh_params(self):
-        """参数配置页增删采样参数后调用：重建整页 + 重启轮询"""
+        """参数配置页增删采样参数后调用：重建整页 + 重启轮询（仅非暂停时）"""
         was_running = self._worker is not None and self._worker.isRunning()
         self._stop_worker()
         self._build_content()
-        if was_running or self.isVisible():
+        if (was_running or self.isVisible()) and not self._paused:
             self._start_worker()

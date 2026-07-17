@@ -12,6 +12,8 @@ from typing import Optional
 
 # 参数表文件路径
 PARAMS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "params.json")
+# 发送历史文件路径
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "send_history.json")
 
 # 默认参数表（首次运行或配置丢失时回退）
 DEFAULT_PARAMS = [
@@ -54,8 +56,22 @@ class Store:
         self.slave_id: int = 1
         self.current_port: str = "COM3"
 
+        # 串口配置
+        self.serial_config: dict = {
+            "port": "COM3",
+            "baudrate": 115200,
+            "bytesize": 8,       # 5/6/7/8
+            "parity": "N",       # N/E/O/S/M
+            "stopbits": 1,       # 1/1.5/2
+            "timeout": 0.1,      # 读超时（秒）
+        }
+
+        # 发送历史（持久化到 config/send_history.json，最近 20 条，去重置顶）
+        self.send_history: list[str] = []
+
         # 加载持久化数据
         self._load_params()
+        self._load_history()
 
     def _load_params(self):
         """从 config/params.json 加载参数表，失败回退默认"""
@@ -101,6 +117,42 @@ class Store:
     def get_curve_visible(self, name: str) -> bool:
         """取某采样参数曲线是否显示（缺省 True）"""
         return self.curve_visible.get(name, True)
+
+    def push_send_history(self, text: str, fmt: str = "HEX", ending: str = "无"):
+        """发送历史：去重置顶，最多 20 条，持久化。
+
+        记录完整发送上下文：内容 + 格式(HEX/ASCII) + 行结束符。
+        """
+        text = text.strip()
+        if not text:
+            return
+        entry = {"text": text, "fmt": fmt, "ending": ending}
+        # 去重（按 text 匹配）
+        self.send_history = [e for e in self.send_history
+                             if (e.get("text") if isinstance(e, dict) else e) != text]
+        self.send_history.insert(0, entry)
+        self.send_history = self.send_history[:20]
+        self._save_history()
+
+    def _load_history(self):
+        """从 config/send_history.json 加载发送历史"""
+        try:
+            if os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.send_history = data[:20]
+        except Exception:
+            pass
+
+    def _save_history(self):
+        """持久化发送历史到 config/send_history.json"""
+        try:
+            os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.send_history, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def validate_param(self, data: dict, exclude_name: str = None) -> dict:
         """校验参数定义，返回 {ok: bool, errors: {field: msg}}"""

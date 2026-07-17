@@ -25,8 +25,18 @@ class PollWorker(QThread):
         self._params = params
         self._interval_ms = interval_ms
         self._running = True
-        # 原型阶段用模拟回包；真实串口阶段换 transport
+        # 协议层：注入串口管理器（真实/模拟串口）+ 日志回调（注入串口终端）
         self._protocol = ModbusProtocol(slave_id=slave_id, connection_state="connected")
+        try:
+            from ..serial.serial_manager import serial_manager
+            self._protocol.set_serial_transport(serial_manager)
+        except ImportError:
+            pass
+        try:
+            from ..pages.serial_page import protocol_log_callback
+            self._protocol.set_log_callback(protocol_log_callback)
+        except ImportError:
+            pass
 
     def update_params(self, params: list[dict]):
         """参数表增删后更新轮询目标（线程安全：list 引用替换）"""
@@ -40,16 +50,8 @@ class PollWorker(QThread):
 
     def run(self):
         while self._running:
-            result = {}
-            for p in self._params:
-                if not self._running:
-                    break
-                r = self._protocol.read_param(p)
-                result[p["name"]] = {
-                    "ok": r["ok"],
-                    "value": r.get("value", 0.0),
-                    "error": r.get("error", ""),
-                }
+            # 批量读取：连续地址的参数合并成一次 Modbus 请求
+            result = self._protocol.read_params_batch(self._params)
             if self._running:
                 self.tick.emit(result)
             # 按配置间隔等待，拆成 100ms 片段便于快速响应 stop
