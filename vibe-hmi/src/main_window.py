@@ -66,18 +66,10 @@ class MainWindow(QMainWindow):
             params_page = pp._pages.get("params")
             if params_page and hasattr(params_page, "_refresh_device_combo"):
                 params_page._refresh_device_combo()
-            # 监控页设备变化时自动重建（通过下拉框刷新触发）
+            # 监控页设备下拉框刷新
             monitor_page = pp._pages.get("monitor")
-            if monitor_page and hasattr(monitor_page, "combo_device"):
-                # 重建设备下拉框
-                monitor_page.combo_device.blockSignals(True)
-                monitor_page.combo_device.clear()
-                for d in store.devices:
-                    monitor_page.combo_device.addItem(f'{d["name"]} (slave {d["slave_id"]})', d["id"])
-                idx = monitor_page.combo_device.findData(store.current_device_id)
-                if idx >= 0:
-                    monitor_page.combo_device.setCurrentIndex(idx)
-                monitor_page.combo_device.blockSignals(False)
+            if monitor_page and hasattr(monitor_page, "_refresh_device_combo"):
+                monitor_page._refresh_device_combo()
 
     def _sync_alarms_tag(self):
         """同步侧边栏"报警记录"标签为未确认报警数"""

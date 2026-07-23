@@ -537,6 +537,9 @@ def build_qss() -> str:
     QPushButton#history-delete:hover {{
         color: {c["DANGER"]};
     }}
+    QCheckBox {{
+        outline: none;
+    }}
     QCheckBox#check-label {{
         font-size: {theme.FS_SM}pt;
         font-weight: {theme.FW_BOLD};

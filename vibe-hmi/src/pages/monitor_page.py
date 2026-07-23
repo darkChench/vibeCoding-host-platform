@@ -172,6 +172,8 @@ class MonitorPage(QWidget):
         self._time_span: int = 60
         self._sample_interval: int = 1
         self._time_format: str = "HH:mm:ss"
+        # 设备切换栏（持久存在，不受空态/正常态重建影响）
+        self._build_device_bar()
         self._build_content()
         # 串口连接/断开时自动重建页面（空态 ↔ 正常态切换）
         from ..serial.serial_manager import serial_manager
@@ -182,6 +184,31 @@ class MonitorPage(QWidget):
         # 先停掉旧的轮询线程
         self._stop_worker()
         self._build_content()
+
+    def _build_device_bar(self):
+        """构建持久设备切换栏（始终在页面顶部，不受内容重建影响）"""
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        bar.addStretch()
+        bar.addWidget(QLabel("设备"), alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.combo_device = QComboBox()
+        self.combo_device.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_device.setMinimumWidth(160)
+        self._refresh_device_combo()
+        self.combo_device.currentIndexChanged.connect(self._on_device_changed)
+        bar.addWidget(self.combo_device, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self._container.addLayout(bar)
+
+    def _refresh_device_combo(self):
+        """刷新设备下拉框选项"""
+        self.combo_device.blockSignals(True)
+        self.combo_device.clear()
+        for d in store.devices:
+            self.combo_device.addItem(f'{d["name"]} (slave {d["slave_id"]})', d["id"])
+        idx = self.combo_device.findData(store.current_device_id)
+        if idx >= 0:
+            self.combo_device.setCurrentIndex(idx)
+        self.combo_device.blockSignals(False)
 
     # ===== 布局 =====
 
@@ -247,16 +274,6 @@ class MonitorPage(QWidget):
         title.setObjectName("card-title")
         hl.addWidget(title)
         hl.addStretch()
-
-        # 设备切换下拉框（放在运行状态前面）
-        self.combo_device = QComboBox()
-        for d in store.devices:
-            self.combo_device.addItem(f'{d["name"]} (slave {d["slave_id"]})', d["id"])
-        idx = self.combo_device.findData(store.current_device_id)
-        if idx >= 0:
-            self.combo_device.setCurrentIndex(idx)
-        self.combo_device.currentIndexChanged.connect(self._on_device_changed)
-        hl.addWidget(self.combo_device, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         # 运行状态：胶囊样式（绿色圆点 + 文字），和曲线 chip 风格统一
         status = QFrame()

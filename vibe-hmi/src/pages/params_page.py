@@ -144,7 +144,9 @@ class ParamsPage(QWidget):
     def _on_device_changed(self):
         """切换设备 → 更新 current_device_id + 刷新表格"""
         device_id = self.combo_device.currentData()
-        if device_id and device_id != store.current_device_id:
+        if not device_id:
+            return
+        if device_id != store.current_device_id:
             store.current_device_id = device_id
             self._refresh_table()
             self._set_edit_mode("create")
@@ -198,6 +200,8 @@ class ParamsPage(QWidget):
         head_layout.addStretch()
         # 设备切换下拉框（放在同步状态前面）
         self.combo_device = NoWheelComboBox()
+        self.combo_device.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_device.setMinimumWidth(160)
         self._refresh_device_combo()
         self.combo_device.currentIndexChanged.connect(self._on_device_changed)
         head_layout.addWidget(self.combo_device, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -391,6 +395,7 @@ class ParamsPage(QWidget):
         self.table.setRowCount(0)
         params = store.filtered_params()
         self.table.setRowCount(len(params))
+        self.table.setUpdatesEnabled(False)
 
         for row, p in enumerate(params):
             # checkbox（居中放在 container 里，不被裁切）
@@ -416,7 +421,9 @@ class ParamsPage(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, col, item)
 
+        self.table.setUpdatesEnabled(True)
         self.table.blockSignals(False)
+        self.table.viewport().update()
         self._update_toolbar_state()
 
     # ===== 工具栏状态 =====
