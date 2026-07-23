@@ -41,25 +41,23 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._sync_monitor_tag()  # 启动时同步侧边栏"实时监控"标签
         self._sync_alarms_tag()   # 启动时同步侧边栏"报警记录"标签
-        self._sync_overview_tag() # 启动时同步侧边栏"设备总览"标签
+        self._sync_device_tags()  # 启动时同步"设备总览"+"设备管理"标签
 
     def _sync_monitor_tag(self):
         """同步侧边栏"实时监控"标签为当前设备采样参数数量"""
         count = len(store.sample_params())
         self.sidebar.update_tag("monitor", f"{count} 点", "ok" if count > 0 else "warn")
 
-    def _sync_overview_tag(self):
-        """同步侧边栏"设备总览"标签为设备总数"""
+    def _sync_device_tags(self):
+        """同步"设备总览"+"设备管理"标签为设备总数"""
         count = len(store.devices)
         self.sidebar.update_tag("overview", f"{count}", "ok" if count > 0 else "warn")
+        self.sidebar.update_tag("deviceManage", f"{count} 台", "ok" if count > 0 else "warn")
 
     def _on_devices_changed(self):
         """设备列表变化 → 刷新参数页/监控页的设备下拉框 + 侧边栏标签"""
-        # 刷新设备管理页侧边栏标签
-        count = len(store.devices)
-        self.sidebar.update_tag("deviceManage", f"{count} 台", "ok" if count > 0 else "warn")
-        # 刷新设备总览页侧边栏标签
-        self.sidebar.update_tag("overview", f"{count}", "ok" if count > 0 else "warn")
+        # 刷新"设备总览"+"设备管理"侧边栏标签
+        self._sync_device_tags()
         # 刷新参数页设备下拉框
         pp = getattr(self, "main_area", None)
         if pp:
