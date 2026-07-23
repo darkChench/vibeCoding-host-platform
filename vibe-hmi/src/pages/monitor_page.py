@@ -52,11 +52,14 @@ class NoWheelComboBox(QComboBox):
 class MetricCard(QFrame):
     """单个点位卡：显示名 + 数值(大) + 单位(小)"""
 
-    def __init__(self, name: str, display: str, unit: str):
+    def __init__(self, name: str, display: str, unit: str, decimals: int = 0):
         super().__init__()
         self.setObjectName("metric")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._name = name
         self._unit = unit
+        self._decimals = decimals
+        self.setMinimumHeight(78)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
@@ -75,13 +78,15 @@ class MetricCard(QFrame):
     def set_value(self, value, ok: bool):
         """刷新数值。value 为 float 或 None（失败显示 --）
 
+        按参数的 decimals 固定小数位（如 4 位则 0.5000，不省略末尾 0）。
         用 <font color> + <small> 标签（Qt 富文本子集），单位用 MUTED 色 + 小字。
         """
         muted = theme.HEX["MUTED"]
         if not ok or value is None:
             num = "--"
         else:
-            num = f"{value}"
+            # 按参数的 decimals 固定小数位（如 0.5 + decimals=4 → "0.5000"）
+            num = f"{value:.{self._decimals}f}"
         self.value.setText(f'{num}<small><font color="{muted}"> {self._unit}</font></small>')
 
 
@@ -157,21 +162,36 @@ class MonitorPage(QWidget):
         self._chips: dict[str, CurveChip] = {}
         self._series: dict[str, QLineSeries] = {}
         self._trend: dict[str, deque] = {}
+        self._paused: bool = True  # 默认暂停（在 __init__ 初始化，避免空态时 showEvent 崩溃）
         self._container = QVBoxLayout(self)
         self._container.setContentsMargins(12, 12, 12, 12)
         self._container.setSpacing(10)
         self._content: QWidget | None = None
+        self._scroll = None  # 外层 QScrollArea（重建时需要清理）
         # 当前时间范围：(总秒数, 采样间隔秒, X 轴格式)，默认 1 分钟
         self._time_span: int = 60
         self._sample_interval: int = 1
         self._time_format: str = "HH:mm:ss"
+        self._build_content()
+        # 串口连接/断开时自动重建页面（空态 ↔ 正常态切换）
+        from ..serial.serial_manager import serial_manager
+        serial_manager.connection_changed.connect(self._on_connection_changed)
+
+    def _on_connection_changed(self, connected: bool):
+        """串口连接状态变化 → 重建监控页（空态 ↔ 正常态）"""
+        # 先停掉旧的轮询线程
+        self._stop_worker()
         self._build_content()
 
     # ===== 布局 =====
 
     def _build_content(self):
         """根据连接状态/参数表重建整页内容"""
-        # 清空旧内容
+        # 清空旧内容（包括外层 scroll）
+        if hasattr(self, "_scroll") and self._scroll:
+            self._scroll.setParent(None)
+            self._scroll.deleteLater()
+            self._scroll = None
         if self._content:
             self._content.setParent(None)
             self._content.deleteLater()
@@ -190,14 +210,25 @@ class MonitorPage(QWidget):
             self._container.addWidget(self._content)
             return
 
-        # 正常态
+        # 正常态：整体放在 QScrollArea 里，超出时整体上下滚动
+        from PySide6.QtWidgets import QScrollArea
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         self._content = QWidget()
         lay = QVBoxLayout(self._content)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(0, 0, 12, 0)  # 右侧留 12px 间隙，避免和滚动条挤在一起
         lay.setSpacing(10)
         lay.addWidget(self._build_metric_card(params))
-        lay.addWidget(self._build_chart_card(params), 1)  # 趋势卡弹性拉伸
-        self._container.addWidget(self._content)
+        chart_card = self._build_chart_card(params)
+        chart_card.setMinimumHeight(360)  # 趋势卡最小高度，保证曲线区够大
+        lay.addWidget(chart_card)
+        lay.addStretch()  # 底部留白
+
+        self._scroll.setWidget(self._content)
+        self._container.addWidget(self._scroll)
 
     def _build_metric_card(self, params: list[dict]) -> QFrame:
         """上卡：实时点位 metric 网格（2 列）"""
@@ -214,6 +245,18 @@ class MonitorPage(QWidget):
         hl.setContentsMargins(10, 0, 10, 0)
         title = QLabel("实时点位")
         title.setObjectName("card-title")
+        hl.addWidget(title)
+        hl.addStretch()
+
+        # 设备切换下拉框（放在运行状态前面）
+        self.combo_device = QComboBox()
+        for d in store.devices:
+            self.combo_device.addItem(f'{d["name"]} (slave {d["slave_id"]})', d["id"])
+        idx = self.combo_device.findData(store.current_device_id)
+        if idx >= 0:
+            self.combo_device.setCurrentIndex(idx)
+        self.combo_device.currentIndexChanged.connect(self._on_device_changed)
+        hl.addWidget(self.combo_device, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         # 运行状态：胶囊样式（绿色圆点 + 文字），和曲线 chip 风格统一
         status = QFrame()
@@ -231,12 +274,10 @@ class MonitorPage(QWidget):
         sl.addWidget(dot)
         sl.addWidget(stext)
 
-        hl.addWidget(title)
-        hl.addStretch()
         hl.addWidget(status, alignment=Qt.AlignmentFlag.AlignVCenter)
         cl.addWidget(head)
 
-        # body：2 列网格
+        # body：2 列网格（按内容自然高度，外层整体滚动）
         body = QWidget()
         grid = QGridLayout(body)
         grid.setContentsMargins(10, 10, 10, 10)
@@ -244,10 +285,10 @@ class MonitorPage(QWidget):
         grid.setVerticalSpacing(10)
         for i, p in enumerate(params):
             row, col = divmod(i, 2)
-            mc = MetricCard(p["name"], p.get("display", ""), p.get("unit", ""))
+            mc = MetricCard(p["name"], p.get("display", ""), p.get("unit", ""), int(p.get("decimals", 0)))
             grid.addWidget(mc, row, col)
             self._metric_cards[p["name"]] = mc
-        cl.addWidget(body, 1)
+        cl.addWidget(body)
         return card
 
     def _build_chart_card(self, params: list[dict]) -> QFrame:
@@ -282,6 +323,9 @@ class MonitorPage(QWidget):
         chip_row = QHBoxLayout()
         chip_row.setSpacing(5)
         for i, p in enumerate(params):
+            # 曲线展示 = "否" 的参数不创建 chip（不参与趋势曲线）
+            if p.get("curve", "是") == "否":
+                continue
             color = PALETTE[i % len(PALETTE)]
             visible = store.get_curve_visible(p["name"])
             chip = CurveChip(p["name"], p.get("display", "") or p["name"], color, visible)
@@ -365,10 +409,12 @@ class MonitorPage(QWidget):
         self._axis_y.setLabelsFont(self._axis_y.labelsFont())  # 默认字体
         self._chart.addAxis(self._axis_y, Qt.AlignmentFlag.AlignLeft)
 
-        # 每个参数一条 series
+        # 每个参数一条 series（曲线展示="否" 的参数不创建 series）
         self._param_info: dict[str, dict] = {}  # name → 参数字典（供 Y 轴标题用）
         for i, p in enumerate(params):
             self._param_info[p["name"]] = p
+            if p.get("curve", "是") == "否":
+                continue
             series = QLineSeries()
             color = PALETTE[i % len(PALETTE)]
             series.setColor(QColor(color))
@@ -560,6 +606,17 @@ class MonitorPage(QWidget):
 
     # ===== 生命周期 =====
 
+    def _on_device_changed(self):
+        """切换设备 → 重建整页（用新设备的参数 + slave_id）"""
+        device_id = self.combo_device.currentData()
+        if device_id and device_id != store.current_device_id:
+            store.current_device_id = device_id
+            was_running = self._worker is not None and self._worker.isRunning()
+            self._stop_worker()
+            self._build_content()
+            if was_running and not self._paused:
+                self._start_worker()
+
     def showEvent(self, event):
         """页面可见时启动轮询（仅在非暂停状态）"""
         super().showEvent(event)
@@ -581,7 +638,7 @@ class MonitorPage(QWidget):
             self._worker.update_params(params)
             return
         self._worker = PollWorker(
-            params, store.slave_id, interval_ms=self._sample_interval * 1000
+            params, store.get_slave_id(), interval_ms=self._sample_interval * 1000
         )
         self._worker.tick.connect(self._on_tick)
         self._worker.start()

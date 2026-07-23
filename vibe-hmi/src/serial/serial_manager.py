@@ -21,16 +21,28 @@ from ..protocol.modbus_protocol import (
 
 
 class ReadThread(QThread):
-    """串口后台读线程：持续读取串口数据，收到发 data_received 信号"""
+    """串口后台读线程：持续读取串口数据，收到发 data_received 信号。
+
+    transact 进行请求-响应时设置 _transacting=True，本线程暂停读取，
+    避免和 transact() 抢读同一个串口导致数据拆碎。
+    """
     data_received = Signal(bytes)
 
     def __init__(self, ser: serial.Serial):
         super().__init__()
         self._serial = ser
         self._running = True
+        self._transacting = False  # transact() 调用时设 True，暂停后台读
+
+    def set_transacting(self, on: bool):
+        self._transacting = on
 
     def run(self):
         while self._running and self._serial and self._serial.is_open:
+            # transact 进行中时让出串口，避免抢读
+            if self._transacting:
+                self.msleep(5)
+                continue
             try:
                 n = self._serial.in_waiting
                 if n > 0:
@@ -97,13 +109,15 @@ class SerialManager(QObject):
                 stopbits=stopbits,
                 timeout=timeout,
             )
-            # 启动读线程
-            self._reader = ReadThread(self._serial)
-            self._reader.data_received.connect(self._on_data_received)
-            self._reader.start()
+            # 真实串口模式不启动 ReadThread（避免和 transact() 抢读）
+            # 所有读取走 transact()，设备主动推送的数据在空闲时由 monitor 线程捕获
             self._is_mock = False
             self._is_connected = True
             self.connection_changed.emit(True)
+            # 启动空闲监听线程（仅在没有 transact 调用时才读取）
+            self._reader = ReadThread(self._serial)
+            self._reader.data_received.connect(self._on_data_received)
+            self._reader.start()
             return True
         except Exception:
             # 打开失败 → 模拟模式
@@ -158,7 +172,7 @@ class SerialManager(QObject):
     def transact(self, request: bytes) -> bytes | None:
         """完整收发：发送请求帧 → 等待响应帧 → 返回响应字节。
 
-        真实模式：write + read 等待回包。
+        真实模式：暂停 ReadThread → write → 按帧长度读完整响应 → 恢复 ReadThread。
         模拟模式：解析请求帧生成模拟响应（含延迟）。
         超时返回 None。
         """
@@ -172,25 +186,59 @@ class SerialManager(QObject):
             # 模拟回包
             return self._mock_response(request)
 
-        # 真实模式：等待响应
+        # 真实模式：暂停后台读线程，独占串口
+        if self._reader:
+            self._reader.set_transacting(True)
+
         try:
             timeout_ms = CONFIG["timeout_ms"]
             deadline = time.time() + timeout_ms / 1000 * (CONFIG["max_retries"] + 1)
             buf = b""
+            # 先清空接收缓冲区残留
+            if self._serial.in_waiting:
+                self._serial.read(self._serial.in_waiting)
+
             while time.time() < deadline:
                 n = self._serial.in_waiting
                 if n > 0:
                     buf += self._serial.read(n)
-                    # Modbus 最小响应 5 字节
-                    if len(buf) >= 5:
+                    # 根据功能码判断完整帧长度
+                    expected = self._expected_resp_len(buf, request)
+                    if expected and len(buf) >= expected:
                         break
-                time.sleep(0.01)
+                time.sleep(0.005)  # 5ms 轮询，避免太频繁
             if buf:
                 self.rx_bytes += len(buf)
                 self.rx_frames += 1
             return buf if buf else None
         except Exception:
             return None
+        finally:
+            # 恢复后台读线程
+            if self._reader:
+                self._reader.set_transacting(False)
+
+    def _expected_resp_len(self, buf: bytes, request: bytes) -> int | None:
+        """根据请求帧和已收到的响应头计算完整响应帧长度。
+
+        返回 None 表示还无法判断（数据不足）。
+        """
+        if len(buf) < 3:
+            return None
+        fc = buf[1]
+        # 异常响应：1(slave) + 1(FC|0x80) + 1(exception) + 2(CRC) = 5 字节
+        if fc & 0x80:
+            return 5
+        # 正常响应按功能码判断
+        if fc in (0x03, 0x04):  # 读保持/输入寄存器
+            byte_count = buf[2]  # 第 3 字节是数据字节数
+            return 1 + 1 + 1 + byte_count + 2  # slave + FC + byteCount + data + CRC
+        if fc == 0x06:  # 写单寄存器 = echo
+            return len(request)
+        if fc == 0x10:  # 写多寄存器 = 1+1+2+2+2 = 8
+            return 8
+        # 未知功能码：收到至少 5 字节就算完整
+        return 5 if len(buf) >= 5 else None
 
     def _mock_response(self, request: bytes) -> bytes | None:
         """模拟模式：根据请求帧生成 Modbus 响应帧"""

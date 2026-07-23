@@ -2,7 +2,7 @@
 参数配置页
 
 迁移自原型 js/pages/params.js。
-左卡：参数表（QTableWidget 11 列）+ 工具栏（新增/编辑/删除 + 设备地址 + 分类筛选）
+左卡：参数表（QTableWidget 11 列）+ 工具栏（新增/编辑/删除 + 分类筛选）
 右卡：编辑表单（QFormLayout）+ 保存/取消
 
 CRUD 走 store（持久化 JSON），校验规则（名称唯一/地址合法hex且不重复/min<=max等）。
@@ -109,6 +109,7 @@ TYPE_DISPLAY = ["uint8", "int16", "uint16", "int32", "uint32", "float", "bool"]
 TYPE_INTERNAL = ["uint8", "int16", "uint16", "int32", "uint32", "float32", "bool"]
 ACCESSES = ["只读", "只写", "读写"]
 CATEGORIES = ["采样参数", "配置参数"]
+CURVE_OPTIONS = ["是", "否"]
 
 # 表格列：checkbox/参数名/显示名/地址/分类/类型/权限/单位/小数/范围/说明
 COLS = ["", "参数名", "显示名", "地址", "分类", "类型", "权限", "单位", "小数", "范围", "说明"]
@@ -127,6 +128,26 @@ class ParamsPage(QWidget):
         self._build_ui()
         self._refresh_table()
         self._set_dirty(False)  # 初始"已同步"
+
+    def _refresh_device_combo(self):
+        """刷新设备下拉框（设备增删后调用）"""
+        self.combo_device.blockSignals(True)
+        self.combo_device.clear()
+        for d in store.devices:
+            self.combo_device.addItem(f'{d["name"]} (slave {d["slave_id"]})', d["id"])
+        # 选中当前设备
+        idx = self.combo_device.findData(store.current_device_id)
+        if idx >= 0:
+            self.combo_device.setCurrentIndex(idx)
+        self.combo_device.blockSignals(False)
+
+    def _on_device_changed(self):
+        """切换设备 → 更新 current_device_id + 刷新表格"""
+        device_id = self.combo_device.currentData()
+        if device_id and device_id != store.current_device_id:
+            store.current_device_id = device_id
+            self._refresh_table()
+            self._set_edit_mode("create")
 
     def _build_ui(self):
         """整个页面可滚动：参数定义（上）+ 新增参数（下），上下堆叠"""
@@ -173,9 +194,14 @@ class ParamsPage(QWidget):
         head_layout.setContentsMargins(10, 0, 10, 0)
         title = QLabel("Modbus RTU 参数定义")
         title.setObjectName("card-title")
-        self.dirty_tag = StatusChip("已同步", "ok")
         head_layout.addWidget(title)
         head_layout.addStretch()
+        # 设备切换下拉框（放在同步状态前面）
+        self.combo_device = NoWheelComboBox()
+        self._refresh_device_combo()
+        self.combo_device.currentIndexChanged.connect(self._on_device_changed)
+        head_layout.addWidget(self.combo_device, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.dirty_tag = StatusChip("已同步", "ok")
         head_layout.addWidget(self.dirty_tag, alignment=Qt.AlignmentFlag.AlignVCenter)
         card_layout.addWidget(head)
 
@@ -196,25 +222,25 @@ class ParamsPage(QWidget):
         self.btn_delete = QPushButton("删除勾选")
         self.btn_delete.setProperty("variant", "danger")
         self.btn_delete.setEnabled(False)
+        self.btn_up = QPushButton("上移")
+        self.btn_up.setProperty("variant", "secondary")
+        self.btn_up.setEnabled(False)
+        self.btn_down = QPushButton("下移")
+        self.btn_down.setProperty("variant", "secondary")
+        self.btn_down.setEnabled(False)
 
         self.btn_create.clicked.connect(lambda: self._set_edit_mode("create"))
         self.btn_edit.clicked.connect(lambda: self._set_edit_mode("edit"))
         self.btn_delete.clicked.connect(self._delete_selected)
+        self.btn_up.clicked.connect(self._move_up)
+        self.btn_down.clicked.connect(self._move_down)
 
         toolbar.addWidget(self.btn_create)
         toolbar.addWidget(self.btn_edit)
         toolbar.addWidget(self.btn_delete)
+        toolbar.addWidget(self.btn_up)
+        toolbar.addWidget(self.btn_down)
         toolbar.addStretch()
-
-        # 设备地址（用 QLineEdit，和原型风格一致）
-        toolbar.addWidget(QLabel("设备地址"))
-        self.slave_input = QLineEdit()
-        self.slave_input.setText(str(store.slave_id))
-        self.slave_input.setFixedWidth(60)
-        self.slave_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.slave_input.setPlaceholderText("1-247")
-        self.slave_input.editingFinished.connect(self._on_slave_changed)
-        toolbar.addWidget(self.slave_input)
 
         # 分类筛选
         toolbar.addWidget(QLabel("分类筛选"))
@@ -231,12 +257,13 @@ class ParamsPage(QWidget):
         self.table.setHorizontalHeaderLabels(COLS)
         # 表头左对齐
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        # Interactive 模式：列宽固定，超出时横向滚动
+        # Interactive 模式：列宽固定，最后一列（说明）拉伸填充剩余空间
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        # 各列固定宽度（第一列复选框 40px，其余按内容给合理宽度）
         col_widths = [40, 120, 90, 80, 90, 80, 60, 60, 50, 120, 150]
         for i, w in enumerate(col_widths):
             self.table.setColumnWidth(i, w)
+        # 说明列（最后一列）拉伸填充
+        self.table.horizontalHeader().setSectionResizeMode(len(col_widths) - 1, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 禁用焦点虚线框
@@ -289,6 +316,8 @@ class ParamsPage(QWidget):
         self.f_type.addItems(TYPE_DISPLAY)
         self.f_access = NoWheelComboBox()
         self.f_access.addItems(ACCESSES)
+        self.f_curve = NoWheelComboBox()
+        self.f_curve.addItems(CURVE_OPTIONS)
         self.f_unit = QLineEdit()
         self.f_decimals = QLineEdit()
         self.f_decimals.setPlaceholderText("0")
@@ -300,7 +329,7 @@ class ParamsPage(QWidget):
         for w in (self.f_name, self.f_display, self.f_address, self.f_unit,
                   self.f_decimals, self.f_min, self.f_max, self.f_desc):
             w.textChanged.connect(self._on_form_changed)
-        for cb in (self.f_category, self.f_type, self.f_access):
+        for cb in (self.f_category, self.f_type, self.f_access, self.f_curve):
             cb.currentTextChanged.connect(self._on_form_changed)
 
         def field(label_text: str, widget) -> QWidget:
@@ -332,6 +361,8 @@ class ParamsPage(QWidget):
         form.addWidget(field("最小值", self.f_min), row, 0)
         form.addWidget(field("最大值", self.f_max), row, 1)
         row += 1
+        form.addWidget(field("曲线展示", self.f_curve), row, 0)
+        row += 1
         form.addWidget(field("说明（可选）", self.f_desc), row, 0, 1, 2)
         row += 1
 
@@ -356,6 +387,7 @@ class ParamsPage(QWidget):
     def _refresh_table(self):
         """刷新表格数据（按筛选过滤）"""
         self.table.blockSignals(True)
+        self.table.clearContents()
         self.table.setRowCount(0)
         params = store.filtered_params()
         self.table.setRowCount(len(params))
@@ -404,27 +436,20 @@ class ParamsPage(QWidget):
         checked = self._checked_rows()
         self.btn_edit.setEnabled(len(checked) == 1)
         self.btn_delete.setEnabled(len(checked) >= 1)
+        # 上移/下移：仅在勾选 1 行时启用，且不是首/末行
+        single = len(checked) == 1
+        total = self.table.rowCount()
+        self.btn_up.setEnabled(single and checked[0] > 0)
+        self.btn_down.setEnabled(single and checked[0] < total - 1)
 
     def _on_table_item_changed(self):
         self._update_toolbar_state()
 
-    # ===== 筛选 / 设备地址 =====
+    # ===== 筛选 =====
 
     def _on_filter_changed(self, text):
         store.param_filter = "all" if text == "全部" else text
         self._refresh_table()
-
-    def _on_slave_changed(self):
-        """设备地址输入完成时校验并更新"""
-        text = self.slave_input.text().strip()
-        try:
-            val = int(text)
-            if 1 <= val <= 247:
-                store.slave_id = val
-            else:
-                self.slave_input.setText(str(store.slave_id))
-        except ValueError:
-            self.slave_input.setText(str(store.slave_id))
 
     # ===== CRUD =====
 
@@ -457,7 +482,7 @@ class ParamsPage(QWidget):
         for w in (self.f_name, self.f_display, self.f_address, self.f_unit,
                   self.f_decimals, self.f_min, self.f_max, self.f_desc):
             w.blockSignals(True)
-        for cb in (self.f_category, self.f_type, self.f_access):
+        for cb in (self.f_category, self.f_type, self.f_access, self.f_curve):
             cb.blockSignals(True)
         self.f_name.clear()
         self.f_display.clear()
@@ -465,6 +490,7 @@ class ParamsPage(QWidget):
         self.f_category.setCurrentIndex(0)
         self.f_type.setCurrentIndex(0)
         self.f_access.setCurrentIndex(0)
+        self.f_curve.setCurrentIndex(1)  # 默认"否"
         self.f_unit.clear()
         self.f_decimals.setText("0")
         self.f_min.clear()
@@ -473,7 +499,7 @@ class ParamsPage(QWidget):
         for w in (self.f_name, self.f_display, self.f_address, self.f_unit,
                   self.f_decimals, self.f_min, self.f_max, self.f_desc):
             w.blockSignals(False)
-        for cb in (self.f_category, self.f_type, self.f_access):
+        for cb in (self.f_category, self.f_type, self.f_access, self.f_curve):
             cb.blockSignals(False)
         # 清空 = 无未保存改动
         self._set_dirty(False)
@@ -483,7 +509,7 @@ class ParamsPage(QWidget):
         for w in (self.f_name, self.f_display, self.f_address, self.f_unit,
                   self.f_decimals, self.f_min, self.f_max, self.f_desc):
             w.blockSignals(True)
-        for cb in (self.f_category, self.f_type, self.f_access):
+        for cb in (self.f_category, self.f_type, self.f_access, self.f_curve):
             cb.blockSignals(True)
         self.f_name.setText(p.get("name", ""))
         self.f_display.setText(p.get("display", ""))
@@ -494,6 +520,7 @@ class ParamsPage(QWidget):
         type_idx = TYPE_INTERNAL.index(type_val) if type_val in TYPE_INTERNAL else 0
         self.f_type.setCurrentIndex(type_idx)
         self.f_access.setCurrentText(p.get("access", "只读"))
+        self.f_curve.setCurrentText(p.get("curve", "是"))
         self.f_unit.setText(p.get("unit", ""))
         self.f_decimals.setText(str(p.get("decimals", 0)))
         self.f_min.setText(str(p.get("min", "")))
@@ -502,7 +529,7 @@ class ParamsPage(QWidget):
         for w in (self.f_name, self.f_display, self.f_address, self.f_unit,
                   self.f_decimals, self.f_min, self.f_max, self.f_desc):
             w.blockSignals(False)
-        for cb in (self.f_category, self.f_type, self.f_access):
+        for cb in (self.f_category, self.f_type, self.f_access, self.f_curve):
             cb.blockSignals(False)
         # 载入刚载入 = 还未改动
         self._set_dirty(False)
@@ -519,6 +546,7 @@ class ParamsPage(QWidget):
             "category": self.f_category.currentText(),
             "type": type_internal,
             "access": self.f_access.currentText(),
+            "curve": self.f_curve.currentText(),
             "unit": self.f_unit.text().strip(),
             "decimals": int(self.f_decimals.text() or 0),
             "min": self.f_min.text().strip(),
@@ -528,20 +556,21 @@ class ParamsPage(QWidget):
 
     def _save(self):
         data = self._collect_form()
-        result = store.validate_param(data, exclude_name=self._editing_name if self._edit_mode == "edit" else None)
+        result = store.validate_param(data, device_id=store.current_device_id, exclude_name=self._editing_name if self._edit_mode == "edit" else None)
         if not result["ok"]:
             msgs = "\n".join(f"• {k}: {v}" for k, v in result["errors"].items())
             QMessageBox.warning(self, "保存失败", "请修正以下错误：\n" + msgs)
             return
 
+        params = store._cur_params()
         if self._edit_mode == "edit":
             # 更新现有
-            for i, p in enumerate(store.params):
+            for i, p in enumerate(params):
                 if p["name"] == self._editing_name:
-                    store.params[i] = data
+                    params[i] = data
                     break
         else:
-            store.params.append(data)
+            params.append(data)
 
         store.save_params()
         self._refresh_table()
@@ -559,10 +588,58 @@ class ParamsPage(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            store.params = [p for p in store.params if p["name"] not in names]
+            params = store._cur_params()
+            store.params[store.current_device_id] = [p for p in params if p["name"] not in names]
             store.save_params()
             self._refresh_table()
             self._set_edit_mode("create")  # 清空表单 + 恢复"已同步"
+
+    def _move_up(self):
+        """上移勾选行：在当前设备参数列表中与前一项交换"""
+        checked = self._checked_rows()
+        if len(checked) != 1:
+            return
+        row = checked[0]
+        params = store.filtered_params()
+        if row <= 0:
+            return
+        name = params[row]["name"]
+        prev_name = params[row - 1]["name"]
+        all_params = store._cur_params()
+        idx_cur = next(i for i, p in enumerate(all_params) if p["name"] == name)
+        idx_prev = next(i for i, p in enumerate(all_params) if p["name"] == prev_name)
+        all_params[idx_cur], all_params[idx_prev] = all_params[idx_prev], all_params[idx_cur]
+        store.save_params()
+        self._refresh_table()
+        self._check_row(row - 1)
+
+    def _move_down(self):
+        """下移勾选行：在当前设备参数列表中与后一项交换"""
+        checked = self._checked_rows()
+        if len(checked) != 1:
+            return
+        row = checked[0]
+        params = store.filtered_params()
+        if row >= len(params) - 1:
+            return
+        name = params[row]["name"]
+        next_name = params[row + 1]["name"]
+        all_params = store._cur_params()
+        idx_cur = next(i for i, p in enumerate(all_params) if p["name"] == name)
+        idx_next = next(i for i, p in enumerate(all_params) if p["name"] == next_name)
+        all_params[idx_cur], all_params[idx_next] = all_params[idx_next], all_params[idx_cur]
+        store.save_params()
+        self._refresh_table()
+        self._check_row(row + 1)
+
+    def _check_row(self, row: int):
+        """勾选指定行（用于移动后保持选中跟随）"""
+        if 0 <= row < self.table.rowCount():
+            container = self.table.cellWidget(row, 0)
+            if container:
+                cb = container.findChild(QCheckBox)
+                if cb:
+                    cb.setChecked(True)
 
     def _cancel(self):
         self._set_edit_mode("create")

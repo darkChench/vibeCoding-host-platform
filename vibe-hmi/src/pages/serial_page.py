@@ -11,7 +11,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QPushButton, QLabel,
     QLineEdit, QComboBox, QCheckBox, QPlainTextEdit, QScrollArea,
-    QSizePolicy,
+    QSizePolicy, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer
 import os
@@ -29,8 +29,9 @@ LOG_SIZE_THRESHOLD = 10 * 1024 * 1024
 
 
 def _now_hms() -> str:
-    """当前日期时间 YYYY-MM-DD HH:MM:SS"""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """当前日期时间 YYYY-MM-DD HH:MM:SS.mmm"""
+    now = datetime.now()
+    return f"{now.strftime('%Y-%m-%d %H:%M:%S')}.{now.microsecond // 1000:03d}"
 
 
 def _bytes_to_hex(data: bytes) -> str:
@@ -197,6 +198,22 @@ class SerialPage(QWidget):
         btn_clear.clicked.connect(self._clear_current_log)
         tl.addWidget(btn_clear)
 
+        # 立即保存按钮：把当前日志保存为 txt
+        btn_save_now = QPushButton("立即保存")
+        btn_save_now.setObjectName("console-tab")
+        btn_save_now.setProperty("variant", "secondary")
+        btn_save_now.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save_now.clicked.connect(self._save_now)
+        tl.addWidget(btn_save_now)
+
+        # 打开本地保存目录按钮
+        btn_open_history = QPushButton("打开本地保存")
+        btn_open_history.setObjectName("console-tab")
+        btn_open_history.setProperty("variant", "secondary")
+        btn_open_history.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_open_history.clicked.connect(self._open_history_dir)
+        tl.addWidget(btn_open_history)
+
         cl.addWidget(tabs_row)
 
         # ===== terminal（暗底，弹性）=====
@@ -315,9 +332,9 @@ class SerialPage(QWidget):
         ts = _now_hms()
         line = [direction, label, content, ts]
         self._lines["raw"].append(line)
-        # 诊断日志也记录协议层事件
+        # 诊断日志也记录协议层事件（带时间戳）
         if direction in ("tx", "rx") and label in ("CRC", "TIMEOUT"):
-            self._lines["diagnostic"].append([direction, label, f"{label}: {content}"])
+            self._lines["diagnostic"].append([direction, label, f"{label}: {content}", ts])
         if self._current_tab == "raw":
             self._append_to_terminal(line)
         # 估算日志大小增长，超过阈值自动保存
@@ -330,23 +347,54 @@ class SerialPage(QWidget):
 
         文件名格式：serial_log_YYYY-MM-DD_HHMMSS.txt
         """
+        filepath = self._write_log_to_file()
+        if filepath:
+            # 清空终端和日志数据，重置大小计数
+            self._lines = {"raw": [], "stats": [], "diagnostic": []}
+            self._log_size = 0
+            self._refresh_terminal()
+
+    def _write_log_to_file(self) -> str | None:
+        """把当前 raw 日志保存为 txt 到 history/ 目录。返回文件路径，失败返回 None。
+
+        不清空终端（供自动保存和手动保存共用）。
+        """
         try:
             os.makedirs(HISTORY_DIR, exist_ok=True)
             filename = f"serial_log_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt"
             filepath = os.path.join(HISTORY_DIR, filename)
-            # 把所有 raw 日志行写成纯文本
             lines_text = []
             for line in self._lines["raw"]:
                 ts = line[3] if len(line) > 3 else ""
                 lines_text.append(f"{ts}  {line[1]}  {line[2]}")
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines_text))
-            # 清空终端和日志数据，重置大小计数
-            self._lines = {"raw": [], "stats": [], "diagnostic": []}
-            self._log_size = 0
-            self._refresh_terminal()
+            return filepath
         except Exception:
-            pass
+            return None
+
+    def _save_now(self):
+        """立即保存：把当前日志保存为 txt（不清空终端）"""
+        filepath = self._write_log_to_file()
+        if filepath:
+            QMessageBox.information(self, "保存成功", f"已保存到\n{filepath}")
+        else:
+            QMessageBox.warning(self, "保存失败", "日志保存失败")
+
+    def _open_history_dir(self):
+        """打开本地保存目录（history/）"""
+        try:
+            os.makedirs(HISTORY_DIR, exist_ok=True)
+            import subprocess
+            import sys
+            if sys.platform == "win32":
+                os.startfile(HISTORY_DIR)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", HISTORY_DIR])
+            else:
+                subprocess.Popen(["xdg-open", HISTORY_DIR])
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", f"无法打开目录：{e}")
 
     def _append_to_terminal(self, line: list[str]):
         """追加一行到终端 QPlainTextEdit。
@@ -636,9 +684,15 @@ class SerialPage(QWidget):
         """刷新统计 tab 内容"""
         self._lines["stats"] = []
         stats = serial_manager.get_stats()
+        # 丢包率：TX 帧数 - RX 帧数 / TX 帧数（每个 TX 应对应一个 RX）
+        tx_frames = stats["tx_frames"]
+        rx_frames = stats["rx_frames"]
+        lost = max(0, tx_frames - rx_frames)
+        loss_rate = f"{lost / tx_frames * 100:.1f}%" if tx_frames > 0 else "0%"
         rows = [
-            ["tx", "TX", f'{stats["tx_bytes"]:,} B / {stats["tx_frames"]} 帧'],
-            ["rx", "RX", f'{stats["rx_bytes"]:,} B / {stats["rx_frames"]} 帧'],
+            ["tx", "TX", f'{stats["tx_bytes"]:,} B / {tx_frames} 帧'],
+            ["rx", "RX", f'{stats["rx_bytes"]:,} B / {rx_frames} 帧'],
+            ["tx", "丢包", f'{lost} 帧 / {loss_rate}'],
             ["rx", "CRC", f'{stats["crc_errors"]} 次'],
         ]
         self._lines["stats"] = rows
@@ -656,6 +710,11 @@ def protocol_log_callback(direction: str, label: str, content: str):
     """全局日志回调函数，供协议层注入 TX/RX 行到串口终端。
 
     PollWorker 在后台线程创建 ModbusProtocol 时，用此函数作为 log_callback。
+    受"全部显示/仅手动"开关控制：仅手动模式下不显示自动轮询的报文。
     """
     if SerialPage._instance:
+        # 协议层自动轮询的 TX/RX 受 _listen_rx 开关控制
+        # （手动发送走 SerialPage._send → append_line，不受此开关控制）
+        if not SerialPage._instance._listen_rx:
+            return
         SerialPage._instance.append_line(direction, label, content)

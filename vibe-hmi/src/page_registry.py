@@ -27,7 +27,8 @@ class PageMeta:
 # 10 个页面的注册顺序 = tabs 顺序
 PAGES: list[PageMeta] = [
     # === 设备 ===
-    PageMeta("overview",    "设备总览", "dashboard",  "设备", "3", "ok"),
+    PageMeta("overview",    "设备总览", "dashboard",  "设备", "1", "ok"),
+    PageMeta("deviceManage","设备管理", "server",     "设备", "1 台", "ok"),
     PageMeta("serial",      "串口连接", "connection", "设备", "COM3", "ok"),
     PageMeta("monitor",     "实时监控", "activity",   "设备", "4 点", "ok"),
     PageMeta("statusPolicy","状态策略", "shield",     "设备", "10 min"),

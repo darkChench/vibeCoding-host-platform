@@ -124,6 +124,7 @@ def build_qss() -> str:
         border: 1px solid {c["PRIMARY_DARK"]};
         border-radius: {r["sm"]}px;
         background: {c["PRIMARY"]};
+        outline: none;
         color: #ffffff;
         font-size: {theme.FS_MD}pt;
         font-weight: {theme.FW_BOLD};
@@ -541,5 +542,21 @@ def build_qss() -> str:
         font-weight: {theme.FW_BOLD};
         color: {c["TEXT"]};
         spacing: 4px;
+    }}
+
+    /* ===== 设备总览 ===== */
+    QPushButton#quick-card {{
+        min-height: 60px;
+        border: 1px solid {c["LINE"]};
+        border-radius: {r["md"]}px;
+        background: #f8fafc;
+        color: {c["TEXT"]};
+        font-size: {theme.FS_LG}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QPushButton#quick-card:hover {{
+        border-color: {c["PRIMARY"]};
+        background: {c["SELECT_BG"]};
+        color: {c["PRIMARY"]};
     }}
     """

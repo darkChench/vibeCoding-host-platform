@@ -66,9 +66,22 @@ def verify_crc(data: list[int]) -> bool:
     return (crc & 0xFF) == data[-2] and ((crc >> 8) & 0xFF) == data[-1]
 
 
+def parse_address(address: str) -> int:
+    """解析寄存器地址。
+
+    支持两种格式：
+    - "0x03E8" / "0X03E8" → 16 进制
+    - "1000" → 十进制（默认）
+    """
+    address = address.strip()
+    if address.lower().startswith("0x"):
+        return int(address, 16)
+    return int(address, 10)
+
+
 def build_read_frame(slave_id: int, address: str, reg_count: int) -> list[int]:
     """生成读保持寄存器请求帧（功能码 03）"""
-    addr = int(address, 16)
+    addr = parse_address(address)
     frame = [
         slave_id & 0xFF,
         FC_READ_HOLDING,
@@ -80,7 +93,7 @@ def build_read_frame(slave_id: int, address: str, reg_count: int) -> list[int]:
 
 def build_write_frame(slave_id: int, address: str, value: int) -> list[int]:
     """生成写单寄存器请求帧（功能码 06）"""
-    addr = int(address, 16)
+    addr = parse_address(address)
     frame = [
         slave_id & 0xFF,
         FC_WRITE_SINGLE,
@@ -311,19 +324,19 @@ class ModbusProtocol:
             return {}
 
         # 按地址排序
-        sorted_params = sorted(params, key=lambda p: int(p["address"], 16))
+        sorted_params = sorted(params, key=lambda p: parse_address(p["address"]))
 
         # 分组：地址连续（前一个的末地址 >= 后一个的起始地址 - 间隔阈值）的合并
         # 间隔阈值：允许小间隔（如 2 寄存器以内）也合并，减少请求次数
         GAP_THRESHOLD = 4  # 寄存器间隔 <= 4 也合并
         groups: list[list[dict]] = []
         for p in sorted_params:
-            addr = int(p["address"], 16)
+            addr = parse_address(p["address"])
             regs = type_to_reg_count(p["type"])
             end = addr + regs
             if groups:
                 last_p = groups[-1][-1]
-                last_end = int(last_p["address"], 16) + type_to_reg_count(last_p["type"])
+                last_end = parse_address(last_p["address"]) + type_to_reg_count(last_p["type"])
                 if addr - last_end <= GAP_THRESHOLD:
                     groups[-1].append(p)
                     continue
@@ -335,9 +348,9 @@ class ModbusProtocol:
             # 两组之间间隔 300ms（避免连续请求太快导致设备处理不过来）
             if idx > 0:
                 time.sleep(0.3)
-            start_addr = int(group[0]["address"], 16)
+            start_addr = parse_address(group[0]["address"])
             last_p = group[-1]
-            total_regs = int(last_p["address"], 16) + type_to_reg_count(last_p["type"]) - start_addr
+            total_regs = parse_address(last_p["address"]) + type_to_reg_count(last_p["type"]) - start_addr
 
             # Modbus 单次最多读 125 寄存器
             total_regs = min(total_regs, 125)
@@ -362,7 +375,7 @@ class ModbusProtocol:
             # 响应格式：[slave, FC, byteCount, data...]
             resp_data = resp[3:]  # 去掉 slave/FC/byteCount
             for p in group:
-                p_addr = int(p["address"], 16)
+                p_addr = parse_address(p["address"])
                 offset = p_addr - start_addr  # 寄存器偏移
                 byte_offset = offset * 2      # 字节偏移
                 reg_count = type_to_reg_count(p["type"])

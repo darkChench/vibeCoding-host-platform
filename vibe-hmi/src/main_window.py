@@ -21,6 +21,11 @@ from .pages.placeholder import PlaceholderPage
 from .pages.params_page import ParamsPage
 from .pages.monitor_page import MonitorPage
 from .pages.serial_page import SerialPage
+from .pages.overview_page import OverviewPage
+from .pages.alarms_page import AlarmsPage
+from .pages.status_policy_page import StatusPolicyPage
+from .pages.settings_page import SettingsPage
+from .pages.device_page import DevicePage
 
 
 class MainWindow(QMainWindow):
@@ -35,11 +40,58 @@ class MainWindow(QMainWindow):
         self._build_statusbar()
         self._build_central()
         self._sync_monitor_tag()  # 启动时同步侧边栏"实时监控"标签
+        self._sync_alarms_tag()   # 启动时同步侧边栏"报警记录"标签
+        self._sync_overview_tag() # 启动时同步侧边栏"设备总览"标签
 
     def _sync_monitor_tag(self):
-        """同步侧边栏"实时监控"标签为当前采样参数数量"""
+        """同步侧边栏"实时监控"标签为当前设备采样参数数量"""
         count = len(store.sample_params())
         self.sidebar.update_tag("monitor", f"{count} 点", "ok" if count > 0 else "warn")
+
+    def _sync_overview_tag(self):
+        """同步侧边栏"设备总览"标签为设备总数"""
+        count = len(store.devices)
+        self.sidebar.update_tag("overview", f"{count}", "ok" if count > 0 else "warn")
+
+    def _on_devices_changed(self):
+        """设备列表变化 → 刷新参数页/监控页的设备下拉框 + 侧边栏标签"""
+        # 刷新设备管理页侧边栏标签
+        count = len(store.devices)
+        self.sidebar.update_tag("deviceManage", f"{count} 台", "ok" if count > 0 else "warn")
+        # 刷新设备总览页侧边栏标签
+        self.sidebar.update_tag("overview", f"{count}", "ok" if count > 0 else "warn")
+        # 刷新参数页设备下拉框
+        pp = getattr(self, "main_area", None)
+        if pp:
+            params_page = pp._pages.get("params")
+            if params_page and hasattr(params_page, "_refresh_device_combo"):
+                params_page._refresh_device_combo()
+            # 监控页设备变化时自动重建（通过下拉框刷新触发）
+            monitor_page = pp._pages.get("monitor")
+            if monitor_page and hasattr(monitor_page, "combo_device"):
+                # 重建设备下拉框
+                monitor_page.combo_device.blockSignals(True)
+                monitor_page.combo_device.clear()
+                for d in store.devices:
+                    monitor_page.combo_device.addItem(f'{d["name"]} (slave {d["slave_id"]})', d["id"])
+                idx = monitor_page.combo_device.findData(store.current_device_id)
+                if idx >= 0:
+                    monitor_page.combo_device.setCurrentIndex(idx)
+                monitor_page.combo_device.blockSignals(False)
+
+    def _sync_alarms_tag(self):
+        """同步侧边栏"报警记录"标签为未确认报警数"""
+        count = store.unack_count()
+        if count > 0:
+            self.sidebar.update_tag("alarms", f"{count}", "warn")
+        else:
+            self.sidebar.update_tag("alarms", "0", "ok")
+
+    def _refresh_overview(self):
+        """刷新设备总览页的动态数值"""
+        op = getattr(self, "overview_page", None)
+        if op:
+            op.refresh()
 
     def _build_menu(self):
         """原生菜单栏：文件/连接/设备/数据/工具/帮助"""
@@ -174,17 +226,22 @@ class MainWindow(QMainWindow):
         """串口连接状态变化 → 更新按钮文字 + 状态行 + store"""
         if connected:
             mode = "模拟" if serial_manager.is_mock else "真实"
+            port_name = self._combo_port['combo'].currentText()
             self.btn_connect.setText("断开")
-            self.lbl_conn.setText(f"{self._combo_port['combo'].currentText()} 已连接（{mode}）")
+            self.lbl_conn.setText(f"{port_name} 已连接（{mode}）")
             self.lbl_conn.setObjectName("stat-ok")
             store.connection_state = "connected"
+            store.current_port = port_name
         else:
             self.btn_connect.setText("连接")
             self.lbl_conn.setText("未连接")
             self.lbl_conn.setObjectName("stat-warn")
             store.connection_state = "disconnected"
+            store.current_port = ""
         # 刷新样式（objectName 变化需要 polish）
         self.lbl_conn.style().polish(self.lbl_conn)
+        # 同步设备总览页的连接状态 metric
+        self._refresh_overview()
 
     def _update_stats(self):
         """定时刷新状态行 RX/TX/CRC 统计"""
@@ -237,6 +294,25 @@ class MainWindow(QMainWindow):
             elif page.page_id == "serial":
                 widget = SerialPage()
                 self.serial_page = widget
+            elif page.page_id == "overview":
+                widget = OverviewPage()
+                self.overview_page = widget
+                # 快捷卡点击 → 跳转对应页面
+                widget.page_clicked.connect(self.show_page)
+            elif page.page_id == "deviceManage":
+                widget = DevicePage()
+                self.device_page = widget
+                # 设备列表变化 → 刷新参数页/监控页的设备下拉框
+                widget.devices_changed.connect(self._on_devices_changed)
+            elif page.page_id == "alarms":
+                widget = AlarmsPage()
+                # 报警确认后 → 联动侧边栏标签 + 设备总览
+                widget.alarms_changed.connect(self._sync_alarms_tag)
+                widget.alarms_changed.connect(self._refresh_overview)
+            elif page.page_id == "statusPolicy":
+                widget = StatusPolicyPage()
+            elif page.page_id == "settings":
+                widget = SettingsPage()
             else:
                 widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
             self.main_area.add_page(page.page_id, widget)

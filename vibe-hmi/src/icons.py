@@ -19,6 +19,14 @@ from . import theme
 # 10 个图标的 SVG 路径（24x24 viewBox，stroke 风格）
 # 参考 Feather Icons / Heroicons 的设计语言
 _ICONS: dict[str, str] = {
+    # deviceManage 设备管理 — server 服务器
+    "server": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="6" rx="1"/>
+        <rect x="2" y="15" width="20" height="6" rx="1"/>
+        <line x1="6" y1="6" x2="6.01" y2="6"/>
+        <line x1="6" y1="18" x2="6.01" y2="18"/>
+    </svg>''',
+
     # overview 设备总览 — dashboard 仪表盘
     "dashboard": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1"/>
