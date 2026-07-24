@@ -67,9 +67,8 @@ class OverviewPage(QWidget):
             self._metric_values["当前串口"].setText(
                 f'{port}<small style="color:{status_color}"> {status}</small>'
             )
-        # 在线设备数：连接串口且有采样数据时才算在线，否则为 0
-        from ..serial.serial_manager import serial_manager
-        if connected and len(store.sample_params()) > 0:
+        # 在线设备数：连接串口即算在线
+        if connected:
             online = len(store.devices)
             color = theme.HEX["OK"]
         else:
@@ -97,6 +96,14 @@ class OverviewPage(QWidget):
                 self._conn_tag.setText("未连接")
                 self._conn_tag.setProperty("variant", "warn")
             self._conn_tag.style().polish(self._conn_tag)
+        # 刷新设备表格状态列
+        if hasattr(self, "table"):
+            is_online = connected
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 5)  # 状态列
+                if item:
+                    item.setText("在线" if is_online else "离线")
+                    item.setForeground(QColor(theme.HEX["OK"]) if is_online else QColor(theme.HEX["MUTED"]))
 
     def _build_metric_card(self) -> QFrame:
         """卡片A 运行总览：4 个 metric"""
@@ -176,26 +183,39 @@ class OverviewPage(QWidget):
         bl = QVBoxLayout(body)
         bl.setContentsMargins(10, 10, 10, 10)
 
-        cols = ["设备名称", "从站地址", "描述", "参数数量"]
+        cols = ["设备名称", "从站地址", "参数数量", "设备位置", "描述", "状态"]
         self.table = QTableWidget()
         self.table.setColumnCount(len(cols))
         self.table.setHorizontalHeaderLabels(cols)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        col_widths = [130, 80, 80, 120, 200, 60]
+        for i, w in enumerate(col_widths):
+            self.table.setColumnWidth(i, w)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)  # 描述列拉伸
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.verticalHeader().setVisible(False)
         self.table.setRowCount(len(store.devices))
 
+        # 在线判断：连接串口且有采样数据时才在线
+        from ..serial.serial_manager import serial_manager
+        is_online = serial_manager.is_connected
+
         for row, d in enumerate(store.devices):
             vals = [d.get("name", ""), str(d.get("slave_id", 1)),
-                    d.get("desc", ""), str(store.param_count(d["id"]))]
+                    str(store.param_count(d["id"])),
+                    d.get("location", ""), d.get("desc", "")]
             for col, val in enumerate(vals):
                 item = QTableWidgetItem(str(val))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, col, item)
-                self.table.setItem(row, col, item)
+            # 状态列：在线/离线（着色）
+            status_item = QTableWidgetItem("在线" if is_online else "离线")
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            status_item.setForeground(QColor(theme.HEX["OK"]) if is_online else QColor(theme.HEX["MUTED"]))
+            self.table.setItem(row, 5, status_item)
         bl.addWidget(self.table)
         cl.addWidget(body, 1)
         return card
