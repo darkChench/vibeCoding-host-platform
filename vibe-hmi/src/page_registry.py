@@ -33,6 +33,7 @@ PAGES: list[PageMeta] = [
     PageMeta("monitor",     "实时监控", "activity",   "设备", "4 点", "ok"),
     PageMeta("statusPolicy","状态策略", "shield",     "设备", "10 min"),
     PageMeta("params",      "参数配置", "sliders",    "设备", "已同步", "ok"),
+    PageMeta("gwConfig",    "国网配置", "zap",        "设备", "未读取", "warn"),
     # === 数据 ===
     PageMeta("alarms",      "报警记录", "bell",       "数据", "1", "warn"),
     PageMeta("history",     "历史数据", "clock",      "数据", "CSV"),

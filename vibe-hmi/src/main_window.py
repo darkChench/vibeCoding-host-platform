@@ -26,6 +26,7 @@ from .pages.alarms_page import AlarmsPage
 from .pages.status_policy_page import StatusPolicyPage
 from .pages.settings_page import SettingsPage
 from .pages.device_page import DevicePage
+from .pages.gw_config_page import GwConfigPage
 
 
 class MainWindow(QMainWindow):
@@ -308,6 +309,16 @@ class MainWindow(QMainWindow):
                 widget.alarms_changed.connect(self._refresh_overview)
             elif page.page_id == "statusPolicy":
                 widget = StatusPolicyPage()
+            elif page.page_id == "gwConfig":
+                widget = GwConfigPage()
+                # 表单状态 → 同步侧边栏标签（"已同步"/"未同步"）
+                widget.state_changed.connect(
+                    lambda synced: self.sidebar.update_tag(
+                        "gwConfig",
+                        "已同步" if synced else "未同步",
+                        "ok" if synced else "warn",
+                    )
+                )
             elif page.page_id == "settings":
                 widget = SettingsPage()
             else:
