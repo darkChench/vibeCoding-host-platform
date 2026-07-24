@@ -1,0 +1,203 @@
+/*
+ * layout.css —— 全局窗口网格与工作区骨架
+ *
+ * 来源：原型行 27-397 的布局相关样式。
+ * 网格行高见 docs/hmi/ui-restoration-spec.md §4（34/34/50/1fr/28）。
+ */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0)),
+    var(--bg);
+  color: var(--text);
+  font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  width: min(1220px, 100vw);
+  margin: 0 auto;
+  padding: 18px;
+}
+
+/* 桌面窗体：5 行 grid */
+.desktop-window {
+  height: min(760px, calc(100vh - 36px));
+  min-height: 560px;
+  border: 1px solid var(--window-border);
+  border-radius: 8px;
+  background: var(--window);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 34px 34px auto minmax(0, 1fr) 28px;
+}
+
+/* 行1 标题栏 */
+.titlebar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  background: var(--titlebar-bg);
+  color: var(--titlebar-fg);
+  user-select: none;
+}
+
+.app-mark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.app-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--primary);
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,.18);
+}
+
+.titlebar-center {
+  overflow: hidden;
+  color: var(--titlebar-sub);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 13px;
+}
+
+.window-buttons {
+  display: flex;
+  gap: 7px;
+}
+
+.window-buttons span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--winbtn-idle);
+}
+
+.window-buttons span:nth-child(1) { background: var(--winbtn-min); }
+.window-buttons span:nth-child(2) { background: var(--winbtn-max); }
+.window-buttons span:nth-child(3) { background: var(--winbtn-close); }
+
+/* 行2 菜单栏 */
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--menubar-bg);
+  color: var(--menubar-fg);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* 行3 工具栏（两行：控件行 + 状态行） */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome);
+}
+
+/* 控件行：5 个 tool-group + 2 按钮 + 弹性占位让 stats-strip 换行 */
+.toolbar > .tool-group,
+.toolbar > .btn {
+  flex: 0 0 auto;
+}
+
+/* 原占位空 div 改成弹性占位，把后面的 stats-strip 推到行尾 */
+.toolbar > div:empty {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 状态条：独占一整行（换到第二行） */
+.toolbar > .stats-strip {
+  flex-basis: 100%;
+  justify-content: flex-start;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
+}
+
+/* 行4 工作区 */
+.workspace {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  background: var(--workspace-bg);
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--sidebar-bg);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.main-area {
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: #fff;
+}
+
+.content {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: #fff;
+}
+
+/* 行5 状态栏 */
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px;
+  border-top: 1px solid var(--line-dark);
+  background: #eef2f7;
+  color: #405066;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 响应式断点 ≤1050px */
+@media (max-width: 1050px) {
+  .shell { padding: 10px; }
+  .desktop-window {
+    height: min(760px, calc(100vh - 20px));
+    min-height: 560px;
+  }
+  .workspace { grid-template-columns: 210px minmax(0, 1fr); }
+  .console { grid-column: 2 / 3; }
+  .modal-body { grid-template-columns: 1fr; }
+}

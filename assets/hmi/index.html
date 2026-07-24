@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>multi-protocol-hmi 上位机原型</title>
+  <meta name="description" content="上位机交互原型。资产入口，PySide6 重写蓝本，详见 docs/hmi/ui-restoration-spec.md。">
+
+  <!-- 样式：tokens → layout → widgets → pages -->
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/widgets.css">
+  <link rel="stylesheet" href="css/pages.css">
+
+  <!-- Chart.js 经 CDN 引入（assets/AGENTS.md 禁止本地化第三方库） -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="desktop-window" aria-label="PC desktop host platform prototype">
+      <!-- 行1 标题栏 -->
+      <header class="titlebar">
+        <div class="app-mark"><span class="app-icon"></span><span>multi-protocol-hmi</span></div>
+        <div class="titlebar-center" id="windowTitle">Windows 上位机 - 首页/总览</div>
+        <div class="window-buttons" aria-hidden="true"><span></span><span></span><span></span></div>
+      </header>
+
+      <!-- 行2 菜单栏 -->
+      <nav class="menubar" aria-label="menu bar">
+        <button class="menu-item" type="button">文件</button>
+        <button class="menu-item" type="button">连接</button>
+        <button class="menu-item" type="button">设备</button>
+        <button class="menu-item" type="button">数据</button>
+        <button class="menu-item" type="button">工具</button>
+        <button class="menu-item" type="button">帮助</button>
+      </nav>
+
+      <!-- 行3 工具栏 -->
+      <section class="toolbar" aria-label="connection toolbar">
+        <div class="tool-group">
+          <span class="tool-label">串口</span>
+          <select class="select" aria-label="串口号"><option>COM3</option><option>COM4</option><option>COM5</option></select>
+        </div>
+        <div class="tool-group">
+          <span class="tool-label">波特率</span>
+          <select class="select" aria-label="波特率"><option>115200</option><option>9600</option><option>57600</option></select>
+        </div>
+        <div class="tool-group">
+          <span class="tool-label">数据位</span>
+          <select class="select select-compact" aria-label="数据位"><option>8 bit</option><option>7 bit</option><option>6 bit</option><option>5 bit</option></select>
+        </div>
+        <div class="tool-group">
+          <span class="tool-label">校验位</span>
+          <select class="select" aria-label="校验位"><option>None</option><option>Even</option><option>Odd</option></select>
+        </div>
+        <div class="tool-group">
+          <span class="tool-label">停止位</span>
+          <select class="select" aria-label="停止位"><option>1 bit</option><option>1.5 bit</option><option>2 bit</option></select>
+        </div>
+        <button class="btn" type="button">断开</button>
+        <button class="btn secondary" type="button">刷新串口</button>
+        <div></div>
+        <div class="stats-strip">
+          <span class="stat-ok">COM3 已连接</span>
+          <span>RX 12,486 B</span>
+          <span>TX 1,024 B</span>
+          <span>CRC 0</span>
+          <span id="aiStatus" class="stat-warn">AI 未配置</span>
+        </div>
+      </section>
+
+      <!-- 行4 工作区 -->
+      <section class="workspace" id="workspace">
+        <aside class="sidebar">
+          <div class="pane-title"><span>项目导航</span></div>
+          <div class="tree">
+            <div class="tree-section">
+              <div class="tree-heading">设备</div>
+              <button class="tree-item" type="button" data-page="overview"><span class="tree-icon">▣</span><span>设备总览</span><span class="tag ok">3</span></button>
+              <button class="tree-item" type="button" data-page="serial"><span class="tree-icon">↔</span><span>串口连接</span><span class="tag ok">COM3</span></button>
+              <button class="tree-item" type="button" data-page="monitor"><span class="tree-icon">▥</span><span>实时监控</span><span class="tag" id="monitorPointCount">4 点</span></button>
+              <button class="tree-item" type="button" data-page="statusPolicy"><span class="tree-icon">◎</span><span>状态策略</span><span class="tag">10 min</span></button>
+              <button class="tree-item" type="button" data-page="params"><span class="tree-icon">⚙</span><span>参数配置</span><span class="tag">已同步</span></button>
+            </div>
+            <div class="tree-section">
+              <div class="tree-heading">数据</div>
+              <button class="tree-item" type="button" data-page="alarms"><span class="tree-icon">!</span><span>报警记录</span><span class="tag warn">1</span></button>
+              <button class="tree-item" type="button" data-page="history"><span class="tree-icon">◇</span><span>历史数据</span><span class="tag">CSV</span></button>
+              <button class="tree-item" type="button" data-page="settings"><span class="tree-icon">i</span><span>系统设置</span><span class="tag">v0.1</span></button>
+            </div>
+            <div class="tree-section">
+              <div class="tree-heading">AI</div>
+              <button class="tree-item" type="button" data-page="aiAssistant"><span class="tree-icon">✦</span><span>AI 助手</span><span class="tag">对话</span></button>
+              <button class="tree-item" type="button" data-page="modelConfig"><span class="tree-icon">⚙</span><span>模型配置</span><span class="tag">设置</span></button>
+            </div>
+          </div>
+        </aside>
+
+        <section class="main-area">
+          <div class="tabs" id="tabs"></div>
+          <div class="content" id="content"></div>
+        </section>
+      </section>
+
+      <!-- 行5 状态栏 -->
+      <footer class="statusbar">
+        <span>保存路径：./save | 配置：config.example.json | 当前用户：工程师</span>
+        <span id="statusPage">首页/总览</span>
+      </footer>
+    </section>
+  </main>
+
+  <!-- 菜单弹窗 -->
+  <div class="menu-popup" id="menuPopup" aria-label="menu actions"></div>
+
+  <!-- 通用动作模态 -->
+  <section class="modal-backdrop" id="actionModal" aria-label="prototype action dialog">
+    <div class="action-modal">
+      <div class="modal-head">
+        <span id="actionTitle">操作</span>
+        <button class="btn secondary" type="button" id="actionCloseBtn">关闭</button>
+      </div>
+      <div class="action-body">
+        <div id="actionBody" class="action-box"></div>
+      </div>
+      <div class="action-footer">
+        <button class="btn secondary" type="button" id="actionCancelBtn">取消</button>
+        <button class="btn" type="button" id="actionConfirmBtn">确定</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Toast -->
+  <div class="toast" id="toast">已复制</div>
+
+  <!-- JS：基础 → 组件 → 页面 → app（app 最后，含 DOMContentLoaded 启动） -->
+  <script src="js/util.js"></script>
+  <script src="js/data/mock.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/components/toast.js"></script>
+  <script src="js/components/modal.js"></script>
+  <script src="js/components/menu.js"></script>
+  <script src="js/components/chart.js"></script>
+  <script src="js/components/dropdown.js"></script>
+  <script src="js/components/console.js"></script>
+  <script src="js/components/modbusProtocol.js"></script>
+  <script src="js/components/aiTools.js"></script>
+  <script src="js/components/llmClient.js"></script>
+  <script src="js/pages/overview.js"></script>
+  <script src="js/pages/serial.js"></script>
+  <script src="js/pages/monitor.js"></script>
+  <script src="js/pages/statusPolicy.js"></script>
+  <script src="js/pages/params.js"></script>
+  <script src="js/pages/alarms.js"></script>
+  <script src="js/pages/history.js"></script>
+  <script src="js/pages/settings.js"></script>
+  <script src="js/pages/modelConfig.js"></script>
+  <script src="js/pages/aiAssistant.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
