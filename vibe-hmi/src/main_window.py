@@ -42,6 +42,8 @@ class MainWindow(QMainWindow):
         self._sync_monitor_tag()  # 启动时同步侧边栏"实时监控"标签
         self._sync_alarms_tag()   # 启动时同步侧边栏"报警记录"标签
         self._sync_device_tags()  # 启动时同步"设备总览"+"设备管理"标签
+        # 串口连接标签初始为"未连接"
+        self.sidebar.update_tag("serial", "未连接", "warn")
 
     def _sync_monitor_tag(self):
         """同步侧边栏"实时监控"标签为当前设备采样参数数量"""
@@ -230,6 +232,11 @@ class MainWindow(QMainWindow):
             store.current_port = ""
         # 刷新样式（objectName 变化需要 polish）
         self.lbl_conn.style().polish(self.lbl_conn)
+        # 同步侧边栏"串口连接"标签
+        if connected:
+            self.sidebar.update_tag("serial", port_name, "ok")
+        else:
+            self.sidebar.update_tag("serial", "未连接", "warn")
         # 同步设备总览页的连接状态 metric
         self._refresh_overview()
 
