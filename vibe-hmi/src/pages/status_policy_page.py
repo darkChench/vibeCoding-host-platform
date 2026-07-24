@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from .. import theme
+from ..store import store
 
 
 # 状态转换预览数据（4 行）
@@ -32,6 +33,7 @@ class StatusPolicyPage(QWidget):
     def __init__(self):
         super().__init__()
         self._build_ui()
+        self._on_timeout_changed()  # 用实际策略值初始化说明表和预览表
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -67,20 +69,22 @@ class StatusPolicyPage(QWidget):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.cb_enable = QCheckBox("启用离线判定")
-        self.cb_enable.setChecked(True)
+        self.cb_enable.setChecked(store.policy.get("enable", True))
         self.cb_enable.setObjectName("check-label")
 
-        self.input_timeout = QLineEdit("10")
+        self.input_timeout = QLineEdit(str(store.policy.get("timeout", 10)))
         self.input_timeout.setFixedWidth(80)
         self.input_timeout.textChanged.connect(self._on_timeout_changed)
 
         self.combo_unit = QComboBox()
         self.combo_unit.addItems(["分钟", "秒"])
+        self.combo_unit.setCurrentText(store.policy.get("unit", "分钟"))
         self.combo_unit.setFixedWidth(80)
         self.combo_unit.currentTextChanged.connect(self._on_timeout_changed)
 
         self.combo_scope = QComboBox()
         self.combo_scope.addItems(["全部设备", "仅采样设备", "自定义设备"])
+        self.combo_scope.setCurrentText(store.policy.get("scope", "全部设备"))
         self.combo_scope.setFixedWidth(140)
 
         form.addRow("启用", self.cb_enable)
@@ -89,14 +93,15 @@ class StatusPolicyPage(QWidget):
         form.addRow("作用范围", self.combo_scope)
         bl.addLayout(form)
 
-        # 说明表（无边框键值表）
+        # 说明表（无边框键值表，超时值联动更新）
+        self._rule_labels = []  # 存需要联动更新的 value QLabel
         rules = [
-            ("判定依据", "最后通讯时间超过阈值"),
-            ("在线 → 离线", "超过 {t} {unit} 无通讯"),
-            ("告警 → 离线", "超过 {t} {unit} 无通讯"),
-            ("离线恢复", "收到有效响应后恢复在线"),
+            ("判定依据", "最后通讯时间超过阈值", False),
+            ("在线 → 离线", "超过 10 分钟 无通讯", True),
+            ("告警 → 离线", "超过 10 分钟 无通讯", True),
+            ("离线恢复", "收到有效响应后恢复在线", False),
         ]
-        for key, val in rules:
+        for key, val, dynamic in rules:
             r = QHBoxLayout()
             k = QLabel(key)
             k.setFixedWidth(100)
@@ -106,6 +111,8 @@ class StatusPolicyPage(QWidget):
             r.addWidget(k)
             r.addWidget(v, 1)
             bl.addLayout(r)
+            if dynamic:
+                self._rule_labels.append(v)
 
         bl.addSpacing(8)
 
@@ -193,17 +200,37 @@ class StatusPolicyPage(QWidget):
                 break
 
     def _on_timeout_changed(self):
-        """超时值变化 → 联动预览表和 tag"""
+        """超时值变化 → 联动预览表、tag 和说明表"""
         self._refresh_preview()
+        # 更新说明表中的动态文字
+        t = self.input_timeout.text() or "10"
+        unit = self.combo_unit.currentText()
+        for label in self._rule_labels:
+            label.setText(f"超过 {t} {unit} 无通讯")
 
     def _save(self):
-        QMessageBox.information(self, "保存", "状态策略已保存（当前会话有效）")
+        """保存策略到 store 并持久化"""
+        try:
+            timeout = int(self.input_timeout.text() or "10")
+        except ValueError:
+            timeout = 10
+        store.update_policy(
+            enable=self.cb_enable.isChecked(),
+            timeout=timeout,
+            unit=self.combo_unit.currentText(),
+            scope=self.combo_scope.currentText(),
+        )
+        self._on_timeout_changed()
+        QMessageBox.information(self, "保存", "状态策略已保存")
 
     def _reset(self):
+        """恢复默认策略"""
         self.input_timeout.setText("10")
         self.combo_unit.setCurrentText("分钟")
         self.combo_scope.setCurrentText("全部设备")
         self.cb_enable.setChecked(True)
+        store.update_policy(enable=True, timeout=10, unit="分钟", scope="全部设备")
+        self._on_timeout_changed()
 
     def _make_head(self, title: str, tag_text: str, tag_variant: str) -> QFrame:
         head = QFrame()

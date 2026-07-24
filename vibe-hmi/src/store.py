@@ -15,6 +15,15 @@ _config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 PARAMS_FILE = os.path.join(_config_dir, "params.json")
 DEVICES_FILE = os.path.join(_config_dir, "devices.json")
 HISTORY_FILE = os.path.join(_config_dir, "send_history.json")
+POLICY_FILE = os.path.join(_config_dir, "policy.json")
+
+# 默认离线判定策略
+DEFAULT_POLICY = {
+    "enable": True,
+    "timeout": 10,
+    "unit": "分钟",
+    "scope": "全部设备",
+}
 
 # 默认参数表（首次运行或配置丢失时回退，挂在默认设备 dev-001 下）
 DEFAULT_PARAMS = [
@@ -100,10 +109,14 @@ class Store:
         # 报警记录
         self.alarms: list[dict] = [dict(a) for a in DEFAULT_ALARMS]
 
+        # 离线判定策略（持久化）
+        self.policy: dict = dict(DEFAULT_POLICY)
+
         # 加载持久化数据
         self._load_devices()
         self._load_params()
         self._load_history()
+        self._load_policy()
 
         # 确保 current_device_id 有效
         if self.devices and not self.current_device_id:
@@ -365,6 +378,33 @@ class Store:
                 json.dump(self.send_history, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    # ===== 离线判定策略 =====
+
+    def _load_policy(self):
+        """从 config/policy.json 加载策略"""
+        try:
+            if os.path.exists(POLICY_FILE):
+                with open(POLICY_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.policy.update(data)
+        except Exception:
+            pass
+
+    def save_policy(self):
+        """持久化策略到 config/policy.json"""
+        try:
+            os.makedirs(_config_dir, exist_ok=True)
+            with open(POLICY_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.policy, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def update_policy(self, enable: bool, timeout: int, unit: str, scope: str):
+        """更新策略并持久化"""
+        self.policy = {"enable": enable, "timeout": timeout, "unit": unit, "scope": scope}
+        self.save_policy()
 
     # ===== 报警 =====
 

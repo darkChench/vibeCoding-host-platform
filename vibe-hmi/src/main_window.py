@@ -350,5 +350,16 @@ class MainWindow(QMainWindow):
         sb.setObjectName("statusbar")
         left = QLabel("保存路径：./save | 配置：config.example.json | 当前用户：工程师")
         self.lbl_current_page = QLabel("首页/总览")
+        self.lbl_datetime = QLabel()
+        self.lbl_datetime.setStyleSheet(f"color: {theme.HEX['MUTED']};")
         sb.addWidget(left)
         sb.addPermanentWidget(self.lbl_current_page)
+        sb.addPermanentWidget(self.lbl_datetime)
+        # 日期时间定时刷新
+        from datetime import datetime
+        self._dt_timer = QTimer()
+        self._dt_timer.timeout.connect(lambda: self.lbl_datetime.setText(
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ))
+        self._dt_timer.start(1000)
+        self.lbl_datetime.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

@@ -67,11 +67,18 @@ class OverviewPage(QWidget):
             self._metric_values["当前串口"].setText(
                 f'{port}<small style="color:{status_color}"> {status}</small>'
             )
-        # 在线设备数（当前所有设备都算在线）
-        online = len(store.devices)
+        # 在线设备数：连接串口且有采样数据时才算在线，否则为 0
+        from ..serial.serial_manager import serial_manager
+        if connected and len(store.sample_params()) > 0:
+            online = len(store.devices)
+            color = theme.HEX["OK"]
+        else:
+            online = 0
+            color = theme.HEX["MUTED"]
         if "在线设备" in self._metric_values:
             self._metric_values["在线设备"].setText(
-                f'{online}<small style="color:{theme.HEX["MUTED"]}"> 台</small>'
+                f'<span style="color:{color};">{online}</span>'
+                f'<small style="color:{theme.HEX["MUTED"]}"> 台</small>'
             )
         # 当前告警数（未确认报警）
         alarms = store.unack_count()
@@ -99,7 +106,7 @@ class OverviewPage(QWidget):
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
 
-        head, self._conn_tag = self._make_card_head_with_tag("运行总览", "在线", "ok")
+        head, self._conn_tag = self._make_card_head_with_tag("运行总览", "未连接", "warn")
         cl.addWidget(head)
 
         body = QWidget()
@@ -160,8 +167,9 @@ class OverviewPage(QWidget):
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
 
-        online = sum(1 for d in store.devices)
-        head = self._make_card_head("设备列表", f"{online} 台", "ok")
+        # 设备列表卡头标签：显示设备总数
+        total = len(store.devices)
+        head = self._make_card_head("设备列表", f"{total} 台", "ok")
         cl.addWidget(head)
 
         body = QWidget()
