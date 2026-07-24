@@ -91,6 +91,11 @@ _ICONS: dict[str, str] = {
         <path d="M5 14l.5 1.7L7 16l-1.5.5L5 18l-.5-1.5L3 16l1.5-.3L5 14z"/>
     </svg>''',
 
+    # gwConfig 国网配置 — zap 闪电（国家电网能源符号）
+    "zap": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+    </svg>''',
+
     # modelConfig 模型配置 — cpu 芯片
     "cpu": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="4" y="4" width="16" height="16" rx="2"/>
