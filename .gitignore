@@ -225,3 +225,6 @@ vibe-hmi/config/
 
 # PySide6 app runtime data
 vibe-hmi/history/
+
+# SQLite database (runtime)
+vibe-hmi/save/

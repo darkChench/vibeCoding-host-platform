@@ -500,7 +500,7 @@ class MonitorPage(QWidget):
     # ===== tick 处理 =====
 
     def _on_tick(self, values: dict):
-        """每轮采样完成：刷新 metric + 追加曲线点（带时间戳）
+        """每轮采样完成：刷新 metric + 追加曲线点（带时间戳）+ 写入 SQLite
 
         暂停时 metric 值仍刷新，但曲线冻结（不追加新点、不滚动 X 轴）。
         """
@@ -523,6 +523,17 @@ class MonitorPage(QWidget):
                 pts = [QPointF(float(ts), float(val)) for ts, val in self._trend[name]]
                 if pts:
                     series.replace(pts)
+
+        # 写入 SQLite（仅成功且有值的采样数据，带时间戳和设备ID）
+        if not self._paused:
+            from ..history_db import insert_batch
+            sample_data = {
+                name: info["value"]
+                for name, info in values.items()
+                if info["ok"] and info["value"] is not None
+            }
+            if sample_data:
+                insert_batch(store.current_device_id, sample_data)
 
         # 暂停时冻结 X 轴滚动和 Y 轴范围
         if self._paused:

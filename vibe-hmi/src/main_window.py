@@ -26,6 +26,7 @@ from .pages.alarms_page import AlarmsPage
 from .pages.status_policy_page import StatusPolicyPage
 from .pages.settings_page import SettingsPage
 from .pages.device_page import DevicePage
+from .pages.history_page import HistoryPage
 
 
 class MainWindow(QMainWindow):
@@ -310,6 +311,8 @@ class MainWindow(QMainWindow):
                 widget = StatusPolicyPage()
             elif page.page_id == "settings":
                 widget = SettingsPage()
+            elif page.page_id == "history":
+                widget = HistoryPage()
             else:
                 widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
             self.main_area.add_page(page.page_id, widget)
