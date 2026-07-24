@@ -397,12 +397,11 @@ class GwConfigPage(QWidget):
         self.f_ver_num.setCurrentIndex(0)  # 默认 01
         self.f_ver_num.currentIndexChanged.connect(self._on_device_form_changed)
 
-        # 字段 5：产品序列号（最低 300001，默认 600001，上下键 +1/-1）
-        self.f_serial = NoWheelSpinBox()
-        self.f_serial.setRange(SERIAL_MIN, SERIAL_MAX)
-        self.f_serial.setSingleStep(1)
-        self.f_serial.setValue(SERIAL_DEFAULT)
-        self.f_serial.valueChanged.connect(self._on_device_form_changed)
+        # 字段 5：产品序列号（文本输入框）
+        self.f_serial = NoWheelLineEdit()
+        self.f_serial.setText(str(SERIAL_DEFAULT))
+        self.f_serial.setPlaceholderText(f"{SERIAL_MIN}~{SERIAL_MAX}")
+        self.f_serial.textChanged.connect(self._on_device_form_changed)
 
         # 字段 6：表计 ID（H）（只读）
         self.f_meter_id_h = NoWheelLineEdit()
@@ -696,7 +695,7 @@ class GwConfigPage(QWidget):
         self.f_ver_label.setCurrentIndex(idx_label)
         idx_num = VERSION_NUMBERS.index(ver_num) if ver_num in VERSION_NUMBERS else 0
         self.f_ver_num.setCurrentIndex(idx_num)
-        self.f_serial.setValue(max(SERIAL_MIN, min(SERIAL_MAX, serial)))
+        self.f_serial.setText(str(max(SERIAL_MIN, min(SERIAL_MAX, serial))))
         # 表计 ID（H/D）只读，按序列号派生展示
         self.f_meter_id_h.setText(f"{serial:X}")
         self.f_meter_id_d.setText(str(serial))
@@ -732,7 +731,11 @@ class GwConfigPage(QWidget):
         vendor = self.f_vendor.text().strip()
         ver_label = self.f_ver_label.currentText()
         ver_num = self.f_ver_num.currentText()
-        serial = self.f_serial.value()
+        try:
+            serial = int(self.f_serial.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "写入失败", "产品序列号必须是数字")
+            return
 
         if serial < SERIAL_MIN:
             QMessageBox.warning(

@@ -202,7 +202,7 @@ class HistoryPage(QWidget):
             self.combo_params.setEnabled(False)
 
         self.combo_format = NoWheelComboBox()
-        self.combo_format.addItems(["CSV", "Excel"])
+        self.combo_format.addItems(["CSV"])
         self.combo_format.setStyleSheet("QComboBox { min-height: 28px; padding: 0 6px; }")
 
         fields_row.addWidget(field("采样点位", self.combo_params), 1)
