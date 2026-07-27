@@ -52,9 +52,17 @@ class LLMWorker(QThread):
         try:
             if self._mode == "send":
                 # 构建消息（对话历史 + 新消息）
+                from datetime import datetime
+                now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+                provider = cfg.get("provider", "")
+                model_name = cfg.get("model", "")
                 messages = [{"role": "system", "content": (
-                    "你是一个工业设备的运维助手。你可以通过工具函数读取传感器数据、"
-                    "查询报警记录、查看趋势数据和设备状态。请用简洁的中文回答。"
+                    f"你是{provider} {model_name}，运行在工业设备上位机中。"
+                    f"当前时间：{now}。可以读取传感器/查报警/看趋势/查设备状态，也可以回答通用问题。"
+                    f"\n\n设备数据说明："
+                    f"\n- 密度单位是 MPa，在表压工况下出现负值是正常现象（负表压），不要将其视为异常。"
+                    f"\n- 各传感器的单位和量程以参数配置为准，不要对单位是否合理做主观判断。"
+                    f"\n- 读取数据后直接如实报告数值和单位即可。"
                 )}]
                 messages.extend(store.ai_messages)
                 messages.append({"role": "user", "content": self._user_text})

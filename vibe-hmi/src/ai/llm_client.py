@@ -22,6 +22,8 @@ class LLMClient:
         self.model = model
         # 自动判断接口类型
         self._is_anthropic = "/anthropic" in self.base_url.lower()
+        # 是否启用智谱 web_search（默认启用，测试连接时可关闭）
+        self._enable_web_search = True
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         """发送对话请求，返回标准化的响应 dict。
@@ -45,6 +47,21 @@ class LLMClient:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+
+        # 智谱 GLM：自动加原生 web_search（仅 OpenAI 兼容接口支持）
+        is_zhipu = "bigmodel.cn" in self.base_url.lower()
+        if is_zhipu and self._enable_web_search:
+            web_search_tool = {
+                "type": "web_search",
+                "web_search": {
+                    "enable": "True",
+                    "search_engine": "search_std",
+                    "search_result": "True",
+                }
+            }
+            if "tools" not in body:
+                body["tools"] = []
+            body["tools"].insert(0, web_search_tool)
 
         resp = requests.post(url, json=body, headers=headers, timeout=60)
         if resp.status_code != 200:
@@ -76,7 +93,7 @@ class LLMClient:
 
         body: dict = {
             "model": self.model,
-            "max_tokens": 1024,
+            "max_tokens": 4096,
             "messages": user_assistant,
         }
         if system_text.strip():

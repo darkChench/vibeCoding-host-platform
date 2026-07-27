@@ -51,14 +51,17 @@ class MainWindow(QMainWindow):
         self._sync_ai_status()  # 启动时同步 AI 状态
 
     def _sync_ai_status(self):
-        """同步状态栏 AI 配置状态"""
+        """同步状态栏 + 侧边栏 AI 配置状态"""
         active = store.active_model_config()
         if active:
+            model_name = active.get("model", "")
             self.lbl_ai.setText(f"AI: {active['provider']}")
             self.lbl_ai.setObjectName("stat-ok")
+            self.sidebar.update_tag("modelConfig", model_name, "ok")
         else:
             self.lbl_ai.setText("AI 未配置")
             self.lbl_ai.setObjectName("stat-warn")
+            self.sidebar.update_tag("modelConfig", "未配置", "warn")
         self.lbl_ai.style().polish(self.lbl_ai)
 
     def _sync_monitor_tag(self):
@@ -256,11 +259,16 @@ class MainWindow(QMainWindow):
         self._refresh_overview()
 
     def _update_stats(self):
-        """定时刷新状态行 RX/TX/CRC 统计"""
+        """定时刷新状态行 RX/TX/CRC/丢包率 统计"""
         stats = serial_manager.get_stats()
         self.lbl_rx.setText(f'RX {stats["rx_bytes"]:,} B')
         self.lbl_tx.setText(f'TX {stats["tx_bytes"]:,} B')
-        self.lbl_crc.setText(f'CRC {stats["crc_errors"]}')
+        # 丢包率
+        tx_frames = stats["tx_frames"]
+        rx_frames = stats["rx_frames"]
+        lost = max(0, tx_frames - rx_frames)
+        loss_rate = f"{lost / tx_frames * 100:.1f}%" if tx_frames > 0 else "0%"
+        self.lbl_crc.setText(f'CRC {stats["crc_errors"]} | 丢包 {loss_rate}')
 
     def _build_workspace(self):
         """工作区：侧边栏 + 主区（含页面路由）"""

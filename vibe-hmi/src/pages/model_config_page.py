@@ -134,10 +134,12 @@ class ModelConfigPage(QWidget):
         self.table.setHorizontalHeaderLabels(COLS)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        col_widths = [40, 100, 250, 120, 150, 50]
+        col_widths = [40, 120, 200, 120, 120, 50]
         for i, w in enumerate(col_widths):
             self.table.setColumnWidth(i, w)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # Base URL 和 API Key 列拉伸填充
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -411,7 +413,7 @@ class ModelConfigPage(QWidget):
 
         try:
             client = LLMClient(base_url, api_key, model)
-            # 用统一的 chat 接口测试（自动识别 OpenAI / Anthropic）
+            client._enable_web_search = False  # 测试连接不联网搜索，避免消耗搜索额度
             data = client.chat([{"role": "user", "content": "你好"}])
             reply = data["choices"][0]["message"].get("content", "")
             QMessageBox.information(self, "连接成功", f"模型 {model} 连接正常\n回复：{reply}")

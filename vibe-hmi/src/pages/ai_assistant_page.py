@@ -31,7 +31,15 @@ class AIAssistantPage(QWidget):
         self._check_model_config()
         # 首次进入注入欢迎语
         if not store.ai_messages:
-            self._add_bubble("assistant", "你好！我是 AI 运维助手。你可以问我：\n• 读取温度/压力等传感器值\n• 查询报警记录\n• 查看趋势数据\n• 查看设备状态")
+            self._add_bubble("assistant",
+                "你好！我是 AI 运维助手。我可以帮你：\n\n"
+                "* 📊 读取传感器数据 — \"读取温度\"、\"读取全部采样参数\"\n"
+                "* 🔔 查询报警记录 — \"有哪些报警\"、\"未确认的报警\"\n"
+                "* 📈 查看趋势数据 — \"温度趋势\"\n"
+                "* 🔧 查看设备状态 — \"设备在线情况\"\n\n"
+                "也可以问我其他问题，比如 Modbus 协议、设备参数含义等。\n\n"
+                "请直接输入你的问题。"
+            )
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -132,7 +140,11 @@ class AIAssistantPage(QWidget):
 
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setTextFormat(Qt.TextFormat.PlainText)
+        # 用户消息用纯文本，助手消息用 Markdown（支持表格/加粗/列表渲染）
+        if role == "user":
+            label.setTextFormat(Qt.TextFormat.PlainText)
+        else:
+            label.setTextFormat(Qt.TextFormat.MarkdownText)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         # 测量文本自然宽度，设置气泡的 sizeHint 宽度
         from PySide6.QtGui import QFontMetrics, QFont
