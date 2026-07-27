@@ -189,6 +189,7 @@ class ModelConfigPage(QWidget):
         self.f_base_url.setPlaceholderText("https://...")
         self.f_api_key = QLineEdit()
         self.f_api_key.setPlaceholderText("sk-...")
+        self.f_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.f_model = QLineEdit()
         self.f_model.setPlaceholderText("如 gpt-4o-mini")
         self.cb_enabled = QCheckBox("启用（AI 助手默认使用第一个启用的提供商）")
@@ -261,8 +262,9 @@ class ModelConfigPage(QWidget):
             self.table.setCellWidget(row, 0, cb_container)
 
             api_key = cfg.get("api_key", "")
+            masked = f"••••{api_key[-4:]}" if len(api_key) > 4 else "••••"
             vals = [cfg.get("provider", ""), cfg.get("base_url", ""),
-                    cfg.get("model", ""), api_key,
+                    cfg.get("model", ""), masked,
                     "✓" if cfg.get("enabled") else "—"]
             for col, val in enumerate(vals, 1):
                 item = QTableWidgetItem(str(val))

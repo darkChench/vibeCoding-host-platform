@@ -231,3 +231,6 @@ vibe-hmi/save/
 # IDE
 .vs/
 .vscode/
+
+# Model config (contains API keys)
+vibe-hmi/config/model_config.json
