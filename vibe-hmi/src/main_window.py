@@ -28,6 +28,8 @@ from .pages.settings_page import SettingsPage
 from .pages.device_page import DevicePage
 from .pages.history_page import HistoryPage
 from .pages.gw_config_page import GwConfigPage
+from .pages.model_config_page import ModelConfigPage
+from .pages.ai_assistant_page import AIAssistantPage
 
 
 class MainWindow(QMainWindow):
@@ -46,6 +48,18 @@ class MainWindow(QMainWindow):
         self._sync_device_tags()  # 启动时同步"设备总览"+"设备管理"标签
         # 串口连接标签初始为"未连接"
         self.sidebar.update_tag("serial", "未连接", "warn")
+        self._sync_ai_status()  # 启动时同步 AI 状态
+
+    def _sync_ai_status(self):
+        """同步状态栏 AI 配置状态"""
+        active = store.active_model_config()
+        if active:
+            self.lbl_ai.setText(f"AI: {active['provider']}")
+            self.lbl_ai.setObjectName("stat-ok")
+        else:
+            self.lbl_ai.setText("AI 未配置")
+            self.lbl_ai.setObjectName("stat-warn")
+        self.lbl_ai.style().polish(self.lbl_ai)
 
     def _sync_monitor_tag(self):
         """同步侧边栏"实时监控"标签为当前设备采样参数数量"""
@@ -219,10 +233,9 @@ class MainWindow(QMainWindow):
     def _on_connection_changed(self, connected: bool):
         """串口连接状态变化 → 更新按钮文字 + 状态行 + store"""
         if connected:
-            mode = "模拟" if serial_manager.is_mock else "真实"
             port_name = self._combo_port['combo'].currentText()
             self.btn_connect.setText("断开")
-            self.lbl_conn.setText(f"{port_name} 已连接（{mode}）")
+            self.lbl_conn.setText(f"{port_name} 已连接")
             self.lbl_conn.setObjectName("stat-ok")
             store.connection_state = "connected"
             store.current_port = port_name
@@ -324,6 +337,11 @@ class MainWindow(QMainWindow):
                 widget = SettingsPage()
             elif page.page_id == "history":
                 widget = HistoryPage()
+            elif page.page_id == "modelConfig":
+                widget = ModelConfigPage()
+                widget.config_changed.connect(self._sync_ai_status)
+            elif page.page_id == "aiAssistant":
+                widget = AIAssistantPage()
             else:
                 widget = PlaceholderPage(page.name, ticket_map.get(page.page_id, ""))
             self.main_area.add_page(page.page_id, widget)

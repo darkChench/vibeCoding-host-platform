@@ -16,6 +16,7 @@ PARAMS_FILE = os.path.join(_config_dir, "params.json")
 DEVICES_FILE = os.path.join(_config_dir, "devices.json")
 HISTORY_FILE = os.path.join(_config_dir, "send_history.json")
 POLICY_FILE = os.path.join(_config_dir, "policy.json")
+MODEL_CONFIG_FILE = os.path.join(_config_dir, "model_config.json")
 
 # 默认离线判定策略
 DEFAULT_POLICY = {
@@ -112,11 +113,17 @@ class Store:
         # 离线判定策略（持久化）
         self.policy: dict = dict(DEFAULT_POLICY)
 
+        # 模型配置（持久化 config/model_config.json）
+        self.model_config: list[dict] = []
+        # AI 对话历史（内存，不持久化）
+        self.ai_messages: list[dict] = []
+
         # 加载持久化数据
         self._load_devices()
         self._load_params()
         self._load_history()
         self._load_policy()
+        self._load_model_config()
 
         # 确保 current_device_id 有效
         if self.devices and not self.current_device_id:
@@ -405,6 +412,59 @@ class Store:
         """更新策略并持久化"""
         self.policy = {"enable": enable, "timeout": timeout, "unit": unit, "scope": scope}
         self.save_policy()
+
+    # ===== 模型配置 =====
+
+    def _load_model_config(self):
+        """从 config/model_config.json 加载"""
+        try:
+            if os.path.exists(MODEL_CONFIG_FILE):
+                with open(MODEL_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.model_config = data
+        except Exception:
+            pass
+
+    def save_model_config(self):
+        """持久化模型配置"""
+        try:
+            os.makedirs(_config_dir, exist_ok=True)
+            with open(MODEL_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.model_config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def add_model_config(self, provider, base_url, api_key, model, enabled=False) -> str:
+        """新增模型配置，返回 id"""
+        cfg_id = f"mc-{len(self.model_config) + 1:03d}"
+        self.model_config.append({
+            "id": cfg_id, "provider": provider, "base_url": base_url,
+            "api_key": api_key, "model": model, "enabled": enabled,
+        })
+        self.save_model_config()
+        return cfg_id
+
+    def update_model_config(self, cfg_id, provider, base_url, api_key, model, enabled):
+        """更新模型配置"""
+        for cfg in self.model_config:
+            if cfg["id"] == cfg_id:
+                cfg.update({"provider": provider, "base_url": base_url,
+                           "api_key": api_key, "model": model, "enabled": enabled})
+                break
+        self.save_model_config()
+
+    def delete_model_config(self, cfg_id):
+        """删除模型配置"""
+        self.model_config = [c for c in self.model_config if c["id"] != cfg_id]
+        self.save_model_config()
+
+    def active_model_config(self) -> Optional[dict]:
+        """取第一个启用的模型配置"""
+        for cfg in self.model_config:
+            if cfg.get("enabled"):
+                return cfg
+        return None
 
     # ===== 报警 =====
 
