@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD013 MD033 -->
 # 界面还原规范 · 总则与设计令牌
 
-> 用途：把 `assets/hmi/page-interaction-review-prototype.html`（下称"原型"）的设计系统固化为 PySide6 可直接消费的令牌与规则，让 Qt 重写达到像素级还原、零歧义。
+> 用途：把 `assets/hmi/index.html`（下称"原型"）的设计系统固化为 PySide6 可直接消费的令牌与规则，让 Qt 重写达到像素级还原、零歧义。
 >
 > 本文件是规范体系的**总入口**。先读本文件掌握令牌与全局结构，再按需查阅另外三份：
 >

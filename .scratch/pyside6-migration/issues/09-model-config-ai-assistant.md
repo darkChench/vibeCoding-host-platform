@@ -4,14 +4,14 @@
 
 **Blocked by:** 03 — 协议层（AI 工具 read_sensor/get_trend 调协议层）, 04 — 参数配置页（工具读 store.params 找点位）
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 模型配置：提供商表 CRUD + 选预设自动填 + 校验（base_url http 开头/key 必填）+ 测试连接
-- [ ] 模型配置持久化 JSON，重启不丢
-- [ ] AI 助手页：对话历史区 + 输入框 + 发送按钮 + Ctrl+Enter 快捷
-- [ ] 真实 LLM 调用：OpenAI 兼容 /chat/completions + tools 参数（4 工具 JSON Schema）
-- [ ] function calling：LLM 返回 tool_call → 执行 aiTools handler → 结果回灌 → LLM 总结
-- [ ] 工具 read_sensor/get_trend 调协议层 read_param
-- [ ] 思考动画 + 工具调用卡片（函数名+参数+结果摘要）
-- [ ] 对话历史切页保留
-- [ ] 未配置模型时提示去模型配置页
+- [x] 模型配置：提供商表 CRUD + 选预设自动填 + 校验（base_url http 开头/key 必填）+ 测试连接
+- [x] 模型配置持久化 JSON，重启不丢
+- [x] AI 助手页：对话历史区 + 输入框 + 发送按钮 + Ctrl+Enter 快捷
+- [x] 真实 LLM 调用：OpenAI 兼容 /chat/completions + tools 参数（4 工具 JSON Schema）
+- [x] function calling：LLM 返回 tool_call → 执行 aiTools handler → 结果回灌 → LLM 总结
+- [x] 工具 read_sensor/get_trend 调协议层 read_param
+- [x] 思考动画 + 工具调用卡片（函数名+参数+结果摘要）
+- [x] 对话历史切页保留
+- [x] 未配置模型时提示去模型配置页

@@ -9,20 +9,21 @@
 ### 允许的操作
 
 - 读取、修改顶层文档：`README.md`、`AGENTS.md`、`CONTRIBUTING.md` 等
-- 读取、修改 `docs/`、`prompts/`、`skills/`、`tools/config/`、`tools/external/` 下的文档与代码
+- 读取、修改 `docs/`、`vibe-hmi/`、`memory-bank/`、`tools/config/`、`tools/external/` 下的文档与代码
 - 新增/修改提示词、技能、文档
 - 提交符合规范的 commit
 
 ### 禁止的操作
 
-- 修改 `.github/workflows/` 中的 CI 配置（除非任务明确要求）)（先不实现）
+- 修改 `.github/workflows/` 中的 CI 配置（除非任务明确要求）
 - 修改 `LICENSE`、`CODE_OF_CONDUCT.md`
 - 在代码中硬编码密钥、Token 或敏感凭证
+- 提交 `vibe-hmi/config/model_config.json`（含 API Key）
 - 未经确认的大范围重构
 
 ### 敏感区域（禁止自动修改）
 
-- `.github/workflows/*.yml` - CI/CD 配置（如存在）先不实现）
+- `.github/workflows/*.yml` - CI/CD 配置（先不实现）
 - `.env*` 文件（如存在）
 
 ---
