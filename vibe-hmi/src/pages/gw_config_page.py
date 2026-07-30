@@ -14,11 +14,17 @@ from PySide6.QtWidgets import (
     QComboBox, QLineEdit, QFrame, QMessageBox, QGridLayout,
     QDateTimeEdit, QSizePolicy, QSpinBox, QScrollArea,
 )
-from PySide6.QtCore import Qt, QDateTime, Signal, QTimer
+from PySide6.QtCore import Qt, QDateTime, QDate, QTime, Signal, QTimer
 from PySide6.QtGui import QWheelEvent
 
 from .. import theme
 from ..serial.serial_manager import serial_manager
+from ..protocol.modbus_protocol import (
+    build_gw_read_frame, parse_gw_read_response, GW_FC,
+    build_gw_write_baud_frame, build_gw_write_parity_frame,
+    build_gw_write_datetime_frame, build_gw_write_addr_frame,
+    parse_gw_write_response,
+)
 
 
 class NoWheelComboBox(QComboBox):
@@ -204,6 +210,7 @@ class GwConfigPage(QWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
+        layout.addWidget(self._build_meter_addr_card())   # 表计通讯地址（modbus 通信地址源）
         layout.addWidget(self._build_comm_card())
         layout.addWidget(self._build_device_card())
         layout.addWidget(self._build_sensor_status_card())
@@ -242,6 +249,62 @@ class GwConfigPage(QWidget):
         lay.addWidget(lbl)
         lay.addWidget(widget)
         return f
+
+    # ===== 顶卡：表计通讯地址（modbus 通信地址源） =====
+
+    def _build_meter_addr_card(self) -> QFrame:
+        """顶卡：表计通讯地址
+
+        单字段卡片：只显示「通信地址」（可编辑），不设读取/写入按钮。
+        该值 = 设备当前地址，是下面「表计通信标识」卡片收发 modbus 帧时
+        使用的**从机地址**。改址流程：本卡保持旧地址 → 下卡通信地址填新地址
+        → 点写入（帧用旧地址下发）→ 设备确认成功后本卡自动同步为新地址。
+        """
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        # card-head：标题 + 状态 tag（无按钮）
+        head = QFrame()
+        head.setObjectName("card-head")
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(10, 0, 10, 0)
+
+        title = QLabel("表计通讯地址")
+        title.setObjectName("card-title")
+        head_layout.addWidget(title)
+
+        head_layout.addStretch()
+
+        # 状态 tag：未配置 / 已配置 / 校验失败
+        from .params_page import StatusChip
+        self.addr_state_tag = StatusChip("未配置", "warn")
+        head_layout.addWidget(self.addr_state_tag, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        card_layout.addWidget(head)
+
+        # body：单字段（通信地址）
+        body = QWidget()
+        form = QGridLayout(body)
+        form.setContentsMargins(14, 12, 14, 14)
+        form.setVerticalSpacing(12)
+        form.setHorizontalSpacing(12)
+        form.setColumnStretch(0, 1)
+        form.setColumnStretch(1, 1)
+
+        # 通信地址（QLineEdit，1-247）
+        self.f_meter_addr = NoWheelLineEdit()
+        self.f_meter_addr.setPlaceholderText("1 ~ 247")
+        self.f_meter_addr.setText("1")
+        self.f_meter_addr.setMaxLength(3)
+        self.f_meter_addr.textChanged.connect(self._on_meter_addr_changed)
+
+        form.addWidget(self._field("通信地址", self.f_meter_addr), 0, 0)
+
+        card_layout.addWidget(body)
+        return card
 
     # ===== 上卡：表计通信标识 =====
 
@@ -292,12 +355,16 @@ class GwConfigPage(QWidget):
         form.setColumnStretch(0, 1)
         form.setColumnStretch(1, 1)
 
-        # 字段 1：通信地址（QLineEdit，1-247）
-        self.f_addr = NoWheelLineEdit()
-        self.f_addr.setPlaceholderText("1 ~ 247")
-        self.f_addr.setText("1")
-        self.f_addr.setMaxLength(3)
-        self.f_addr.textChanged.connect(self._on_form_changed)
+        # 字段 1：通信地址（目标地址 / 待写入地址）
+        # 与顶卡「表计通讯地址」是两个独立的值：
+        #   顶卡 = 设备当前地址（发送 modbus 帧时用的从机地址）
+        #   本字段 = 想让设备变成的地址（写入时下发的新地址）
+        # 读取后两者一致；改地址时只改本字段，写入成功后顶卡才同步成新值。
+        self.f_comm_addr = NoWheelLineEdit()
+        self.f_comm_addr.setPlaceholderText("1 ~ 247")
+        self.f_comm_addr.setText("1")
+        self.f_comm_addr.setMaxLength(3)
+        self.f_comm_addr.textChanged.connect(self._on_form_changed)
 
         # 字段 2：波特率（QComboBox）
         self.f_baud = NoWheelComboBox()
@@ -320,8 +387,8 @@ class GwConfigPage(QWidget):
         self.f_datetime.dateTimeChanged.connect(self._on_form_changed)
         self.f_datetime.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        # 两列布局：第 1 列 → 通信地址、奇偶校验位；第 2 列 → 波特率、日期时间
-        form.addWidget(self._field("通信地址", self.f_addr), 0, 0)
+        # 两列布局：通信地址 / 波特率 —— 奇偶校验位 / 日期时间
+        form.addWidget(self._field("通信地址", self.f_comm_addr), 0, 0)
         form.addWidget(self._field("波特率", self.f_baud), 0, 1)
         form.addWidget(self._field("奇偶校验位", self.f_parity), 1, 0)
         form.addWidget(self._field("日期时间", self.f_datetime), 1, 1)
@@ -665,6 +732,41 @@ class GwConfigPage(QWidget):
         """任一字段改动 → 标记未同步"""
         self._set_synced(False)
 
+    # ===== 顶卡：表计通讯地址 校验回调 =====
+
+    @staticmethod
+    def _parse_addr(text: str):
+        """把地址文本解析成 1~247 的整数；非法返回 None"""
+        try:
+            addr = int(text.strip())
+        except ValueError:
+            return None
+        return addr if 1 <= addr <= 247 else None
+
+    def _sync_meter_addr(self, addr: int):
+        """把顶卡「表计通讯地址」同步成设备的当前地址
+
+        仅在读取成功 / 写入成功之后调用：写入用的是旧地址，
+        设备确认改址成功后，顶卡（从机地址源）才跟着变成新地址。
+        """
+        self.f_meter_addr.setText(str(addr))  # textChanged 会刷新状态 tag
+
+    def _on_meter_addr_changed(self, *_args):
+        """通信地址变更 → 校验 + 切换状态 tag"""
+        text = self.f_meter_addr.text().strip()
+        if not text:
+            self.addr_state_tag.update_state("未配置", "warn")
+            return
+        try:
+            addr = int(text)
+        except ValueError:
+            self.addr_state_tag.update_state("校验失败", "warn")
+            return
+        if 1 <= addr <= 247:
+            self.addr_state_tag.update_state("已配置", "ok")
+        else:
+            self.addr_state_tag.update_state("校验失败", "warn")
+
     # ===== 设备基本信息标识：状态 + 读写 =====
 
     def _set_device_synced(self, synced: bool):
@@ -792,8 +894,18 @@ class GwConfigPage(QWidget):
     # ===== 读取 =====
 
     def _on_read(self):
-        """从设备读取国网协议参数 → 回填表单"""
-        # 模拟/真实串口读取：这里用 mock 数据回填
+        """从设备读取国网协议参数 → 回填表单
+
+        modbus 从机地址 = 顶卡「表计通讯地址」（设备当前地址）。
+        读回来的通信地址填进本卡的「通信地址」字段，读取后两处一致。
+
+        协议（FC=0x66，非标准 Modbus）：
+          请求：<slave> 66 03 01 20 00 <CRC_LO CRC_HI>
+          响应：<slave> 66 0F 81 20 00 41 0A
+                <addr> <baud> <parity> <year_LO year_HI>
+                <month> <day> <hour> <minute> <second>
+                <CRC_LO CRC_HI>
+        """
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "读取失败",
@@ -801,34 +913,100 @@ class GwConfigPage(QWidget):
             )
             return
 
-        # TODO: 真实协议解析后回填。下面用模拟值演示流程
-        try:
-            # 程序填充时屏蔽信号，避免误触发"未同步"
-            self._set_fields(
-                address="1",
-                baud_index=2,    # 9600
-                parity_index=0,  # 无校验
-                reset_time=True,
+        # modbus 从机地址取自顶卡「表计通讯地址」
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            QMessageBox.warning(
+                self, "读取失败",
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数"
             )
+            return
+
+        # 构建请求帧（<slave> 66 03 01 20 00 + CRC）
+        request = build_gw_read_frame(slave)
+        hex_req = " ".join(f"{b:02X}" for b in request)
+
+        try:
+            # 真实模式由 serial_manager 走串口；模拟模式也会生成响应帧
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                QMessageBox.warning(
+                    self, "读取失败",
+                    "设备无响应（超时），请检查串口连接和从机地址。"
+                )
+                return
+
+            parsed = parse_gw_read_response(list(resp_bytes))
+            if parsed is None:
+                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+                QMessageBox.warning(
+                    self, "读取失败",
+                    f"响应帧解析失败：\n{hex_resp}\n\n"
+                    f"（期望：FC=0x{GW_FC:02X} + 至少 20 字节 + CRC 通过）"
+                )
+                return
+
+            # 按解析结果回填表单
+            self._set_fields(
+                addr=parsed["addr"],
+                baud_code=parsed["baud_code"],
+                parity_code=parsed["parity_code"],
+                datetime_tuple=(
+                    parsed["year"], parsed["month"], parsed["day"],
+                    parsed["hour"], parsed["minute"], parsed["second"],
+                ),
+            )
+            # 读回来的地址即设备当前地址 → 同步顶卡
+            self._sync_meter_addr(parsed["addr"])
             self._set_synced(True)
-            QMessageBox.information(self, "读取成功", "已从设备读取国网协议参数")
+
+            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+            QMessageBox.information(
+                self, "读取成功",
+                f"已从设备（从机地址 {slave}）读取国网协议参数\n\n"
+                f"请求：{hex_req}\n"
+                f"响应：{hex_resp}"
+            )
         except Exception as e:
             QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
 
-    def _set_fields(self, *, address: str, baud_index: int,
-                    parity_index: int, reset_time: bool):
-        """程序填充字段（屏蔽信号）"""
-        widgets = [self.f_addr, self.f_datetime]
+    def _set_fields(self, *, addr: int, baud_code: int = None,
+                    parity_code: int = None, reset_time: bool = False,
+                    datetime_tuple: tuple = None):
+        """程序填充字段（屏蔽信号）
+
+        baud_code / parity_code: 设备返回的代码（baud: 0=2400 1=4800 2=9600 3=19200；
+        parity: 0=无 1=奇 2=偶），按 userData 在 combo 中查找索引。
+        datetime_tuple: (year, month, day, hour, minute, second)，优先级高于 reset_time。
+        """
+        widgets = [self.f_datetime, self.f_comm_addr]
         combos = [self.f_baud, self.f_parity]
         for w in widgets:
             w.blockSignals(True)
         for c in combos:
             c.blockSignals(True)
 
-        self.f_addr.setText(address)
-        self.f_baud.setCurrentIndex(baud_index)
-        self.f_parity.setCurrentIndex(parity_index)
-        if reset_time:
+        self.f_comm_addr.setText(str(addr))
+
+        if baud_code is not None:
+            idx = self.f_baud.findData(baud_code)
+            if idx >= 0:
+                self.f_baud.setCurrentIndex(idx)
+        if parity_code is not None:
+            idx = self.f_parity.findData(parity_code)
+            if idx >= 0:
+                self.f_parity.setCurrentIndex(idx)
+
+        if datetime_tuple is not None:
+            year, month, day, hour, minute, second = datetime_tuple
+            try:
+                self.f_datetime.setDateTime(
+                    QDateTime(QDate(year, month, day), QTime(hour, minute, second))
+                )
+            except Exception:
+                # 设备返回的日期/时间字段非法时回退为当前时间
+                self._reset_datetime_to_now()
+        elif reset_time:
             self._reset_datetime_to_now()
 
         for w in widgets:
@@ -838,24 +1016,62 @@ class GwConfigPage(QWidget):
 
     # ===== 写入 =====
 
+    # 写入步骤的顺序：波特率 → 奇偶校验位 → 日期时间 → 通信地址
+    # 通信地址必须最后写：前 3 步用旧地址，地址改了之后顶卡从机地址才同步成新值。
+    _WRITE_STEPS = ("baud", "parity", "datetime", "addr")
+    _STEP_LABELS = {
+        "baud":     "波特率",
+        "parity":   "奇偶校验位",
+        "datetime": "日期时间",
+        "addr":     "通信地址",
+    }
+
     def _on_write(self):
-        """把表单值写入设备"""
-        addr_text = self.f_addr.text().strip()
-        # 校验：通信地址 1-247
-        try:
-            addr = int(addr_text)
-            if not (1 <= addr <= 247):
-                raise ValueError
-        except ValueError:
+        """把表单值写入设备
+
+        关键：帧里的从机地址用顶卡「表计通讯地址」（设备当前地址），
+        下发的新通信地址用本卡的「通信地址」字段。
+        例：设备现在是 1，想改成 20 → 顶卡填 1、本卡填 20，
+        发出的帧从机地址是 01，设备改址成功后顶卡才自动变成 20。
+
+        写入流程按国网协议规范分 4 步串行下发（每步等设备回包再下一步）：
+          1) 波特率       <slave> 66 06 02 20 02 20 01 <baud_code>  CRC
+          2) 奇偶校验位   <slave> 66 06 02 20 03 20 01 <parity_code> CRC
+          3) 日期时间     <slave> 66 0C 02 20 04 40 07 <年LE 月 日 时 分 秒>  CRC
+          4) 通信地址     <slave> 66 06 02 20 01 20 01 <addr>  CRC
+        全部成功后顶卡「表计通讯地址」同步成写入的新地址。
+        """
+        # 1) 从机地址：顶卡「表计通讯地址」= 设备当前地址
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
             QMessageBox.warning(
                 self, "写入失败",
-                "通信地址必须为 1 ~ 247 之间的整数"
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数\n"
+                "（该值是发送 modbus 帧时使用的从机地址，需与设备当前地址一致）"
+            )
+            return
+
+        # 2) 待写入的新通信地址：本卡「通信地址」
+        new_addr = self._parse_addr(self.f_comm_addr.text())
+        if new_addr is None:
+            QMessageBox.warning(
+                self, "写入失败",
+                "「表计通信标识」中的通信地址必须为 1 ~ 247 之间的整数"
             )
             return
 
         baud = self.f_baud.currentData()
         parity = self.f_parity.currentData()
-        dt = self.f_datetime.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        qdt = self.f_datetime.dateTime()
+        dt_str = qdt.toString("yyyy-MM-dd HH:mm:ss")
+
+        # 收集 datetime 6 个分量
+        year = qdt.date().year()
+        month = qdt.date().month()
+        day = qdt.date().day()
+        hour = qdt.time().hour()
+        minute = qdt.time().minute()
+        second = qdt.time().second()
 
         if not serial_manager.is_connected:
             QMessageBox.warning(
@@ -865,36 +1081,153 @@ class GwConfigPage(QWidget):
             # 即使未连接，仍然展示参数让用户确认
             QMessageBox.information(
                 self, "待写入参数（演示）",
-                f"通信地址：{addr}\n"
+                f"从机地址（当前）：{slave}\n"
+                f"通信地址（待写入）：{new_addr}\n"
                 f"波特率：{baud}（{self.f_baud.currentText().split(':')[1]}）\n"
                 f"奇偶校验位：{parity}（{self.f_parity.currentText().split(':')[1]}）\n"
-                f"日期时间：{dt}"
+                f"日期时间：{dt_str}"
             )
             return
 
-        # TODO: 真实协议打包下发。下面仅模拟成功
-        try:
-            # 模拟写入延迟
-            self.btn_write.setText("写入中...")
-            self.btn_write.setEnabled(False)
-            QTimer.singleShot(600, lambda: self._write_done(addr, baud, parity, dt))
-        except Exception as e:
-            self.btn_write.setText("写入")
-            self.btn_write.setEnabled(True)
-            QMessageBox.warning(self, "写入失败", f"写入异常：{e}")
+        # 把所有参数暂存到 self，下一步状态机按顺序取用
+        self._write_slave = slave
+        self._write_new_addr = new_addr
+        self._write_baud = baud
+        self._write_parity = parity
+        self._write_dt_str = dt_str
+        self._write_year = year
+        self._write_month = month
+        self._write_day = day
+        self._write_hour = hour
+        self._write_minute = minute
+        self._write_second = second
+        self._write_step_index = 0
+        self._write_results: list[dict] = []  # 每步的请求/响应回执
+        self._write_busy = True
 
-    def _write_done(self, addr, baud, parity, dt):
-        """写入完成回调"""
+        self.btn_write.setText("写入中...")
+        self.btn_write.setEnabled(False)
+        # 启动分步状态机
+        self._do_write_step()
+
+    def _do_write_step(self):
+        """执行当前步骤并自增：波特率→校验→时间→地址，全部成功后 _write_all_done。"""
+        if not self._write_busy:
+            return
+        idx = self._write_step_index
+        if idx >= len(self._WRITE_STEPS):
+            self._write_all_done()
+            return
+        step = self._WRITE_STEPS[idx]
+
+        try:
+            if step == "baud":
+                frame = build_gw_write_baud_frame(self._write_slave, self._write_baud)
+            elif step == "parity":
+                frame = build_gw_write_parity_frame(self._write_slave, self._write_parity)
+            elif step == "datetime":
+                frame = build_gw_write_datetime_frame(
+                    self._write_slave,
+                    self._write_year, self._write_month, self._write_day,
+                    self._write_hour, self._write_minute, self._write_second,
+                )
+            elif step == "addr":
+                frame = build_gw_write_addr_frame(self._write_slave, self._write_new_addr)
+            else:
+                raise ValueError(f"未知写入步骤：{step}")
+        except ValueError as e:
+            self._write_abort(f"参数非法：{e}", step, None, None)
+            return
+
+        # 发送并等待响应（transact 同步阻塞：模拟模式 50~100ms，真实模式最多 ~380ms）
+        try:
+            resp_bytes = serial_manager.transact(bytes(frame))
+        except Exception as e:
+            self._write_abort(f"串口异常：{e}", step, frame, None)
+            return
+
+        if not resp_bytes:
+            self._write_abort("设备无响应（超时）", step, frame, None)
+            return
+
+        resp = list(resp_bytes)
+        parsed = parse_gw_write_response(resp, frame)
+        if parsed is None:
+            hex_resp = " ".join(f"{b:02X}" for b in resp)
+            self._write_abort(
+                f"回包校验失败（FC/CRC 不通过）：\n{hex_resp}",
+                step, frame, resp,
+            )
+            return
+
+        # 该步成功，记录回执
+        self._write_results.append({
+            "step": step,
+            "label": self._STEP_LABELS[step],
+            "frame": frame,
+            "resp": resp,
+        })
+
+        # 下一步（让 UI 有机会刷新）
+        self._write_step_index += 1
+        QTimer.singleShot(50, self._do_write_step)
+
+    def _write_abort(self, reason: str, step: str,
+                     frame: list[int] | None, resp: list[int] | None):
+        """某一步失败：终止状态机，恢复按钮，弹错误框"""
+        self._write_busy = False
         self.btn_write.setText("写入")
         self.btn_write.setEnabled(True)
+        self._set_synced(False)
+
+        lines = [f"第 {self._write_step_index + 1} 步「{self._STEP_LABELS[step]}」失败：{reason}"]
+        if frame is not None:
+            lines.append("请求：" + " ".join(f"{b:02X}" for b in frame))
+        if resp is not None:
+            lines.append("回包：" + " ".join(f"{b:02X}" for b in resp))
+        lines.append(f"已完成 {len(self._write_results)} / {len(self._WRITE_STEPS)} 步，"
+                     f"后续步骤未执行。")
+        QMessageBox.warning(self, "写入失败", "\n".join(lines))
+
+    def _write_all_done(self):
+        """4 步全部成功：恢复按钮、同步顶卡、汇总展示"""
+        self._write_busy = False
+        self.btn_write.setText("写入")
+        self.btn_write.setEnabled(True)
+
+        slave = self._write_slave
+        new_addr = self._write_new_addr
+        baud = self._write_baud
+        parity = self._write_parity
+        dt_str = self._write_dt_str
+
+        # 改址成功后，后续通信必须用新地址 → 同步顶卡
+        self._sync_meter_addr(new_addr)
         self._set_synced(True)
+
+        # 汇总 4 步的请求/响应（便于现场排错）
+        step_lines = []
+        for r in self._write_results:
+            req_hex = " ".join(f"{b:02X}" for b in r["frame"])
+            resp_hex = " ".join(f"{b:02X}" for b in r["resp"])
+            step_lines.append(f"  [{r['label']}]")
+            step_lines.append(f"    请求：{req_hex}")
+            step_lines.append(f"    响应：{resp_hex}")
+
+        addr_note = (
+            f"  通信地址：{slave} → {new_addr}（顶部表计通讯地址已同步）\n"
+            if new_addr != slave else
+            f"  通信地址：{new_addr}（未变）\n"
+        )
         QMessageBox.information(
             self, "写入成功",
-            f"国网协议参数已写入设备：\n"
-            f"  通信地址：{addr}\n"
+            f"国网协议参数已分 4 步写入设备：\n"
+            f"  从机地址（发送时）：{slave}\n"
+            + addr_note +
             f"  波特率：{baud}\n"
             f"  奇偶校验位：{parity}\n"
-            f"  日期时间：{dt}"
+            f"  日期时间：{dt_str}\n"
+            f"\n报文流水：\n" + "\n".join(step_lines)
         )
 
     # ===== 第三卡：传感器状态 自动采集 =====

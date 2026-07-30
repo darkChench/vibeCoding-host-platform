@@ -20,7 +20,9 @@ FC_WRITE_SINGLE = 0x06
 
 # 协议层配置
 CONFIG = {
-    "timeout_ms": 100,       # 超时阈值
+    # 超时阈值：低波特率设备（2400/4800）单包 8~20 字节往返可达 200~300ms，
+    # 国网协议 FC=0x66 实测约 215ms，故提到 300ms 以覆盖低速场景。
+    "timeout_ms": 380,       # 超时阈值
     "max_retries": 1,        # 重试次数
     "no_response_rate": 0.0,  # 模拟无响应概率（测试时设 0）
     "crc_error_rate": 0.0,    # 模拟 CRC 错误概率（测试时设 0）
@@ -101,6 +103,198 @@ def build_write_frame(slave_id: int, address: str, value: int) -> list[int]:
         (value >> 8) & 0xFF, value & 0xFF,
     ]
     return append_crc(frame)
+
+
+# 国网协议（表计通信标识）
+# 读请求帧固定格式：<slave> 66 03 01 20 00 <CRC_LO> <CRC_HI>（8 字节）
+# 功能码 0x66 是非标准 Modbus FC，用于国网协议自定义读命令。
+GW_FC = 0x66
+GW_READ_PAYLOAD = [0x03, 0x01, 0x20, 0x00]  # 固定的寄存器地址/数量字段
+GW_READ_HEADER_LEN = 5  # 响应中 slave(1) + FC(1) + byteCount(1) + 头(5) 共 8 字节头
+
+
+def build_gw_read_frame(slave_id: int) -> list[int]:
+    """生成国网协议「读取表计通信标识」请求帧（FC=0x66）。
+
+    例：slave=2 → [0x02, 0x66, 0x03, 0x01, 0x20, 0x00, 0x41, 0xB5]
+        slave=1 → [0x01, 0x66, 0x03, 0x01, 0x20, 0x00, 0x41, 0x86]
+    """
+    frame = [slave_id & 0xFF, GW_FC] + GW_READ_PAYLOAD
+    return append_crc(frame)
+
+
+def parse_gw_read_response(resp: list[int]) -> dict | None:
+    """解析国网协议读响应。
+
+    响应结构（20 字节）：
+        [0]    slave
+        [1]    FC (0x66)
+        [2]    byte count (0x0F = 15)
+        [3..7] 头(5 字节，协议固定，目前不使用)
+        [8]    通讯地址
+        [9]    波特率代码（0=2400 / 1=4800 / 2=9600 / 3=19200）
+        [10]   奇偶校验代码（0=无 / 1=奇 / 2=偶）
+        [11..12] 年（LE 2 字节，如 0x07EA = 2026）
+        [13]   月
+        [14]   日
+        [15]   时
+        [16]   分
+        [17]   秒
+        [18..19] CRC（LE 2 字节）
+
+    校验失败或长度不足返回 None。
+    """
+    # 至少需要 1+1+1+5+1+1+1+2+1+1+1+1+1+2 = 20 字节
+    if len(resp) < 8 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    addr = resp[8]
+    baud_code = resp[9]
+    parity_code = resp[10]
+    year = (resp[12] << 8) | resp[11]  # LE：字节序列 EA 07 → 0x07EA = 2026
+    month = resp[13]
+    day = resp[14]
+    hour = resp[15]
+    minute = resp[16]
+    second = resp[17]
+
+    return {
+        "addr": addr,
+        "baud_code": baud_code,
+        "parity_code": parity_code,
+        "year": year,
+        "month": month,
+        "day": day,
+        "hour": hour,
+        "minute": minute,
+        "second": second,
+    }
+
+
+# 国网协议（表计通信标识）写命令
+# 帧结构：<slave> 66 <byteCount> <5字节头> <数据> <CRC_LO> <CRC_HI>
+# 5 字节头格式：02 20 <sub_id> <fmt> <len>
+#   sub_id: 01=通信地址 / 02=波特率 / 03=奇偶校验位 / 04=日期时间
+#   fmt:    20 = 单字节写, 40 = 多字节写
+#   len:    01 = 1 字节数据, 07 = 7 字节数据（2 字节年 + 5 字节 MDHMS）
+# 单字节写：byteCount=0x06（5 头 + 1 数据），总帧 12 字节
+# 多字节写：byteCount=0x0C（5 头 + 7 数据），总帧 17 字节
+GW_WRITE_HEADER_ADDR   = [0x02, 0x20, 0x01, 0x20, 0x01]  # 通信地址
+GW_WRITE_HEADER_BAUD   = [0x02, 0x20, 0x02, 0x20, 0x01]  # 波特率
+GW_WRITE_HEADER_PARITY = [0x02, 0x20, 0x03, 0x20, 0x01]  # 奇偶校验位
+GW_WRITE_HEADER_DT     = [0x02, 0x20, 0x04, 0x40, 0x07]  # 日期时间
+
+# 写命令子 ID（用于响应解析中识别）
+GW_WRITE_SUB_ADDR = 0x01
+GW_WRITE_SUB_BAUD = 0x02
+GW_WRITE_SUB_PARITY = 0x03
+GW_WRITE_SUB_DT = 0x04
+
+
+def _build_gw_write_frame(slave_id: int, header: list[int], data: list[int]) -> list[int]:
+    """通用国网写帧构建：<slave> 66 <byteCount> <header> <data> <CRC>
+
+    byteCount = 5 字节头 + 数据字节数。
+    """
+    payload = list(header) + list(data)
+    byte_count = len(payload) & 0xFF
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def build_gw_write_baud_frame(slave_id: int, baud_code: int) -> list[int]:
+    """国网协议：写波特率。
+
+    例：slave=2, baud=9600(2) → 02 66 06 02 20 02 20 01 02 F3 94
+    """
+    if baud_code not in (0, 1, 2, 3):
+        raise ValueError(f"baud_code 必须是 0/1/2/3，得到 {baud_code}")
+    return _build_gw_write_frame(slave_id, GW_WRITE_HEADER_BAUD, [baud_code & 0xFF])
+
+
+def build_gw_write_parity_frame(slave_id: int, parity_code: int) -> list[int]:
+    """国网协议：写奇偶校验位。
+
+    例：slave=2, parity=0(无校验) → 02 66 06 02 20 03 20 01 00 73 A9
+    """
+    if parity_code not in (0, 1, 2):
+        raise ValueError(f"parity_code 必须是 0/1/2，得到 {parity_code}")
+    return _build_gw_write_frame(slave_id, GW_WRITE_HEADER_PARITY, [parity_code & 0xFF])
+
+
+def build_gw_write_datetime_frame(slave_id: int, year: int, month: int,
+                                  day: int, hour: int, minute: int, second: int) -> list[int]:
+    """国网协议：写日期时间。
+
+    数据格式（7 字节）：<year_LO> <year_HI> <month> <day> <hour> <minute> <second>
+    年份按小端 2 字节编码（如 2026 → 0x07EA → 字节序列 EA 07）。
+
+    例：slave=2, 2021-07-29 15:33:58 →
+        02 66 0C 02 20 04 40 07 E5 07 07 1D 0F 21 3A 78 76
+    """
+    if not (2000 <= year <= 2099):
+        raise ValueError(f"年份超出范围 (2000~2099)：{year}")
+    if not (1 <= month <= 12):
+        raise ValueError(f"月份非法：{month}")
+    if not (1 <= day <= 31):
+        raise ValueError(f"日期非法：{day}")
+    if not (0 <= hour <= 23):
+        raise ValueError(f"小时非法：{hour}")
+    if not (0 <= minute <= 59):
+        raise ValueError(f"分钟非法：{minute}")
+    if not (0 <= second <= 59):
+        raise ValueError(f"秒非法：{second}")
+
+    year_lo = year & 0xFF
+    year_hi = (year >> 8) & 0xFF
+    data = [year_lo, year_hi, month, day, hour, minute, second]
+    return _build_gw_write_frame(slave_id, GW_WRITE_HEADER_DT, data)
+
+
+def build_gw_write_addr_frame(slave_id: int, addr: int) -> list[int]:
+    """国网协议：写通信地址。
+
+    例：slave=2, addr=1 → 02 66 06 02 20 01 20 01 01 B3 D1
+    """
+    if not (1 <= addr <= 247):
+        raise ValueError(f"通信地址必须 1~247，得到 {addr}")
+    return _build_gw_write_frame(slave_id, GW_WRITE_HEADER_ADDR, [addr & 0xFF])
+
+
+def parse_gw_write_response(resp: list[int], request: list[int]) -> dict | None:
+    """解析国网协议写响应。
+
+    响应按"回显请求"约定：设备收到合法写命令后原样回传（便于上层按 CRC + 字节数判定）。
+    异常时设备可能返回 0x86（FC|0x80）等异常帧，本函数对异常帧不特别处理，
+    只在长度/CRC/FC 三项通过时返回 dict。
+
+    返回：
+        ok: True 表示回包 CRC 通过且 FC 正确
+        sub_id: 写入的子项（01=地址/02=波特率/03=校验/04=时间），从请求头提取
+        echo: 回包原始字节列表
+    失败返回 None。
+    """
+    # 最少：slave(1) + FC(1) + byteCount(1) + 0 数据 + CRC(2) = 5 字节
+    if len(resp) < 5:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    # 从请求头识别写入子项（请求第 5 字节 = header[2] = sub_id）
+    # 请求布局：<slave> 66 <byteCount> 02 20 <sub_id> ...
+    sub_id = request[5] if len(request) > 5 else 0
+
+    return {
+        "ok": True,
+        "sub_id": sub_id,
+        "echo": resp,
+    }
 
 
 def float32_to_bytes(value: float) -> list[int]:
@@ -224,8 +418,6 @@ class ModbusProtocol:
             resp_bytes = self._serial_manager.transact(bytes(frame))
             if resp_bytes is None or len(resp_bytes) == 0:
                 self._log("rx", "TIMEOUT", f"等待 {CONFIG['timeout_ms']}ms 无响应")
-                # 累计请求失败次数（用于稳定的累计丢包率）
-                self._serial_manager.tx_failures += 1
                 return {"type": "timeout"}
             resp = list(resp_bytes)
             hex_resp = " ".join(f"{b:02X}" for b in resp)
@@ -233,9 +425,6 @@ class ModbusProtocol:
             # CRC 校验
             if not verify_crc(resp):
                 self._log("rx", "CRC", "回包校验失败")
-                # 累加 CRC 错误统计（让通信统计与诊断日志一致）
-                self._serial_manager.crc_errors += 1
-                self._serial_manager.tx_failures += 1
                 return {"type": "crc_error", "resp": resp}
             return {"type": "ok", "resp": resp}
 
@@ -281,9 +470,6 @@ class ModbusProtocol:
                 if not verify_crc(result["resp"]):
                     last_error = "CRC 校验失败"
                     self._log("rx", "CRC", "回包校验失败")
-                    # 累加 CRC 错误统计（防御性二次校验，与通信统计保持一致）
-                    if self._serial_manager:
-                        self._serial_manager.crc_errors += 1
                     if attempt < CONFIG["max_retries"]:
                         retried += 1
                         continue
