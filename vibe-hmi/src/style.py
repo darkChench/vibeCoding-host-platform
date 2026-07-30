@@ -303,15 +303,33 @@ def build_qss() -> str:
         background: {c["SIDEBAR_BG"]};
         border-right: 1px solid {c["LINE"]};
     }}
-    QLabel#pane-title {{
+    QFrame#pane-title {{
         background: {c["PANE_TITLE_BG"]};
+        border-bottom: 1px solid {c["LINE"]};
+        min-height: 38px;
+        max-height: 38px;
+    }}
+    QFrame#pane-title QLabel#pane-title-text {{
+        background: transparent;
         color: {c["TEXT"]};
         font-weight: {theme.FW_BOLD};
         font-size: {theme.FS_MD}pt;
-        padding: 0 12px;
-        min-height: 38px;
-        max-height: 38px;
-        border-bottom: 1px solid {c["LINE"]};
+    }}
+    QPushButton#sidebar-collapse-btn {{
+        background: transparent;
+        border: none;
+        border-radius: {r["sm"]}px;
+        color: {c["MUTED"]};
+        font-size: 13pt;
+        font-weight: {theme.FW_BOLD};
+        padding: 0;
+    }}
+    QPushButton#sidebar-collapse-btn:hover {{
+        background: {c["ROW_HOVER_BG"]};
+        color: {c["TEXT"]};
+    }}
+    QPushButton#sidebar-collapse-btn:pressed {{
+        background: {c["SELECT_BG"]};
     }}
     QWidget#tree QLabel#tree-heading {{
         color: {c["MUTED"]};
