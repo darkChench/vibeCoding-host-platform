@@ -50,7 +50,7 @@ class NoWheelComboBox(QComboBox):
 
 
 class MetricCard(QFrame):
-    """单个点位卡：显示名 + 数值(大) + 单位(小)"""
+    """单个点位卡：显示名 + 数值(大) + 单位(小) + 最近更新时间"""
 
     def __init__(self, name: str, display: str, unit: str, decimals: int = 0):
         super().__init__()
@@ -71,23 +71,35 @@ class MetricCard(QFrame):
         self.value.setObjectName("metric-value")
         self.value.setTextFormat(Qt.TextFormat.RichText)
         self.value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+        self.value.setWordWrap(True)  # 数值+单位+时间较长时允许换行，避免溢出
 
         lay.addWidget(self.label)
         lay.addWidget(self.value, 1)
 
-    def set_value(self, value, ok: bool):
+    def set_value(self, value, ok: bool, update_time: str = ""):
         """刷新数值。value 为 float 或 None（失败显示 --）
 
         按参数的 decimals 固定小数位（如 4 位则 0.5000，不省略末尾 0）。
         用 <font color> + <small> 标签（Qt 富文本子集），单位用 MUTED 色 + 小字。
+        更新时间接在单位后面（同一行），用更小字号；仅 ok=True 时刷新时间。
         """
         muted = theme.HEX["MUTED"]
         if not ok or value is None:
             num = "--"
+            # 失败时不更新时间（保持上次成功的时间文案）
+            self.value.setText(f'{num}<small><font color="{muted}"> {self._unit}</font></small>')
         else:
             # 按参数的 decimals 固定小数位（如 0.5 + decimals=4 → "0.5000"）
             num = f"{value:.{self._decimals}f}"
-        self.value.setText(f'{num}<small><font color="{muted}"> {self._unit}</font></small>')
+            # 时间接在单位后面（同一行），用比单位更小的字号（8pt）+ MUTED 色
+            # 用 span style 精确控制字号，比 small 标签更小、更明确
+            time_part = (
+                f'  <span style="font-size:8pt; color:{muted};">{update_time}</span>'
+                if update_time else ""
+            )
+            self.value.setText(
+                f'{num}<small><font color="{muted}"> {self._unit}</font></small>{time_part}'
+            )
 
 
 class CurveChip(QFrame):
@@ -352,10 +364,11 @@ class MonitorPage(QWidget):
         hl.addLayout(chip_row)
 
         # 暂停/继续按钮（默认暂停，用户点"开始采样"才启动轮询）
+        # state 属性驱动颜色：start=主色蓝（开始采样），pause=红色（暂停）
         self._paused = True
         self.btn_pause = QPushButton("开始采样")
         self.btn_pause.setObjectName("btn-pause")
-        self.btn_pause.setProperty("variant", "secondary")
+        self.btn_pause.setProperty("state", "start")
         self.btn_pause.setFixedHeight(26)
         self.btn_pause.setStyleSheet("QPushButton { min-height: 26px; padding: 0 10px; }")
         self.btn_pause.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -505,10 +518,12 @@ class MonitorPage(QWidget):
         暂停时 metric 值仍刷新，但曲线冻结（不追加新点、不滚动 X 轴）。
         """
         now_ms = QDateTime.currentMSecsSinceEpoch()
+        # 本轮采样时间，用于刷新 metric 卡片的"最近更新时间"
+        now_str = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
         for name, info in values.items():
             card = self._metric_cards.get(name)
             if card:
-                card.set_value(info["value"], info["ok"])
+                card.set_value(info["value"], info["ok"], now_str)
 
             # 暂停时跳过曲线更新（冻结当前画面）
             if self._paused:
@@ -583,7 +598,16 @@ class MonitorPage(QWidget):
     def _toggle_pause(self):
         """切换暂停状态：默认暂停，点"开始采样"启动轮询，再点"暂停"停止"""
         self._paused = not self._paused
-        self.btn_pause.setText("暂停" if not self._paused else "开始采样")
+        # 文字 + 颜色状态同步：采样中显示"暂停"(红)，暂停时显示"开始采样"(蓝)
+        if self._paused:
+            self.btn_pause.setText("开始采样")
+            self.btn_pause.setProperty("state", "start")
+        else:
+            self.btn_pause.setText("暂停")
+            self.btn_pause.setProperty("state", "pause")
+        # 触发 QSS 重新求值，让 state 属性的颜色生效
+        self.btn_pause.style().unpolish(self.btn_pause)
+        self.btn_pause.style().polish(self.btn_pause)
         # 暂停时停止轮询线程，恢复时重新启动
         if self._paused:
             self._stop_worker()

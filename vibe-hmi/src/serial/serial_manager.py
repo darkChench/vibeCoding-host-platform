@@ -80,9 +80,10 @@ class SerialManager(QObject):
         # 统计
         self.tx_bytes = 0
         self.rx_bytes = 0
-        self.tx_frames = 0
-        self.rx_frames = 0
-        self.crc_errors = 0
+        self.tx_frames = 0       # 累计发送帧数（= 请求次数）
+        self.rx_frames = 0       # 累计接收帧数
+        self.crc_errors = 0      # 累计 CRC 错误数
+        self.tx_failures = 0     # 累计请求失败次数（timeout + crc_error + 无响应），用于稳定的丢包率
 
     # ===== 连接管理 =====
 
@@ -292,6 +293,7 @@ class SerialManager(QObject):
             "tx_frames": self.tx_frames,
             "rx_frames": self.rx_frames,
             "crc_errors": self.crc_errors,
+            "tx_failures": self.tx_failures,
         }
 
     def reset_stats(self):
@@ -301,6 +303,7 @@ class SerialManager(QObject):
         self.tx_frames = 0
         self.rx_frames = 0
         self.crc_errors = 0
+        self.tx_failures = 0
 
 
 # 全局单例

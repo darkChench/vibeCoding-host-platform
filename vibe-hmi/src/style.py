@@ -141,6 +141,31 @@ def build_qss() -> str:
     QPushButton[variant="secondary"]:hover {{
         background: #eef3f8;
     }}
+    QPushButton[variant="secondary"]:checked {{
+        border-color: {c["PRIMARY"]};
+        background: {c["PRIMARY"]};
+        color: #ffffff;
+    }}
+    QPushButton[variant="secondary"]:checked:hover {{
+        background: {c["PRIMARY_DARK"]};
+    }}
+    /* 监控页采样按钮：start=主色蓝（开始采样），pause=红色（暂停） */
+    QPushButton#btn-pause[state="start"] {{
+        border-color: {c["PRIMARY_DARK"]};
+        background: {c["PRIMARY"]};
+        color: #ffffff;
+    }}
+    QPushButton#btn-pause[state="start"]:hover {{
+        background: {c["PRIMARY_DARK"]};
+    }}
+    QPushButton#btn-pause[state="pause"] {{
+        border-color: {c["DANGER_BORDER"]};
+        background: {c["DANGER"]};
+        color: #ffffff;
+    }}
+    QPushButton#btn-pause[state="pause"]:hover {{
+        background: {c["DANGER_BORDER"]};
+    }}
     QPushButton:disabled {{
         border-color: {c["DISABLED_BORDER"]};
         background: {c["DISABLED_BG"]};
@@ -233,6 +258,9 @@ def build_qss() -> str:
     QFrame#card {{
         border: 1px solid {c["LINE"]};
         border-radius: {r["md"]}px;
+        background: #ffffff;
+    }}
+    QWidget#card-body {{
         background: #ffffff;
     }}
     QFrame#card-head {{

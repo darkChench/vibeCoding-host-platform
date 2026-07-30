@@ -682,19 +682,21 @@ class SerialPage(QWidget):
     # ===== 统计 tab =====
 
     def _refresh_stats(self):
-        """刷新统计 tab 内容"""
+        """刷新统计 tab 内容。
+
+        丢包率用累计失败次数 / 累计请求次数，单调累计不会回退。
+        """
         self._lines["stats"] = []
         stats = serial_manager.get_stats()
-        # 丢包率：TX 帧数 - RX 帧数 / TX 帧数（每个 TX 应对应一个 RX）
+        # 丢包率：累计请求失败次数 / 累计请求次数（timeout + crc_error 计入失败）
         tx_frames = stats["tx_frames"]
-        rx_frames = stats["rx_frames"]
-        lost = max(0, tx_frames - rx_frames)
-        loss_rate = f"{lost / tx_frames * 100:.1f}%" if tx_frames > 0 else "0%"
+        failures = stats["tx_failures"]
+        loss_rate = f"{failures / tx_frames * 100:.1f}%" if tx_frames > 0 else "0%"
         rows = [
             ["tx", "TX", f'{stats["tx_bytes"]:,} B / {tx_frames} 帧'],
-            ["rx", "RX", f'{stats["rx_bytes"]:,} B / {rx_frames} 帧'],
-            ["tx", "丢包", f'{lost} 帧 / {loss_rate}'],
-            ["rx", "CRC", f'{stats["crc_errors"]} 次'],
+            ["rx", "RX", f'{stats["rx_bytes"]:,} B / {stats["rx_frames"]} 帧'],
+            ["tx", "丢包", f'{failures} 次 / {loss_rate}（累计失败/总请求）'],
+            ["rx", "CRC", f'{stats["crc_errors"]} 次（累计）'],
         ]
         self._lines["stats"] = rows
         self._refresh_terminal()

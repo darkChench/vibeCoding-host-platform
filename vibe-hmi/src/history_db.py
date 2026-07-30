@@ -22,20 +22,26 @@ DB_PATH = os.path.join(_DB_DIR, "history.db")
 
 
 def _get_conn() -> sqlite3.Connection:
-    """获取数据库连接（自动建库建表）"""
+    """获取数据库连接（自动建库建表）
+
+    value 列允许 NULL：表示该参数本轮采到了但值为无效（NaN/Inf/解析失败）。
+    这样"微水"等恒为 NaN 的参数也能留痕，导出时按空值显示，不会丢失参数列。
+    """
     os.makedirs(_DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # 建表（IF NOT EXISTS）
+    # 建表（IF NOT EXISTS）—— value 允许 NULL
     conn.execute("""
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id TEXT NOT NULL,
             param_name TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            value REAL NOT NULL
+            value REAL
         )
     """)
+    # 迁移：旧库的 value 列可能是 NOT NULL，需重建表去掉约束
+    _migrate_drop_value_notnull(conn)
     # 时间索引（加速时间范围查询）
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_samples_timestamp ON samples(timestamp)
@@ -49,15 +55,57 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_drop_value_notnull(conn: sqlite3.Connection):
+    """迁移：若旧库 value 列是 NOT NULL，则重建表去掉约束（允许存 NULL）。
+
+    SQLite 不支持 ALTER COLUMN，需走 建新表→复制→重命名 的标准迁移流程。
+    通过 PRAGMA 检测列约束，仅在必要时执行，幂等。
+    """
+    # 检测 value 列是否 NOT NULL
+    cols = conn.execute("PRAGMA table_info(samples)").fetchall()
+    if not cols:
+        return  # 表不存在（CREATE 在外层会建）
+    value_col = next((c for c in cols if c["name"] == "value"), None)
+    if not value_col or value_col["notnull"] == 0:
+        return  # value 已允许 NULL，无需迁移
+    # value 是 NOT NULL，需迁移
+    conn.executescript("""
+        CREATE TABLE samples_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT NOT NULL,
+            param_name TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            value REAL
+        );
+        INSERT INTO samples_new (id, device_id, param_name, timestamp, value)
+        SELECT id, device_id, param_name, timestamp, value FROM samples;
+        DROP TABLE samples;
+        ALTER TABLE samples_new RENAME TO samples;
+    """)
+
+
 def insert_sample(device_id: str, param_name: str, value: float, ts: Optional[str] = None):
-    """写入一条采样数据"""
+    """写入一条采样数据。
+
+    NaN / Inf / None 值存为 NULL（表示该参数本轮采到了但值无效，留痕用于导出）。
+    """
+    import math
     if ts is None:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    # 无效值转 NULL
+    store_value = None
+    if value is not None:
+        try:
+            fval = float(value)
+            if not (math.isnan(fval) or math.isinf(fval)):
+                store_value = fval
+        except (ValueError, TypeError):
+            pass  # 保持 None
     conn = _get_conn()
     try:
         conn.execute(
             "INSERT INTO samples (device_id, param_name, timestamp, value) VALUES (?, ?, ?, ?)",
-            (device_id, param_name, ts, value),
+            (device_id, param_name, ts, store_value),
         )
         conn.commit()
     finally:
@@ -68,23 +116,22 @@ def insert_batch(device_id: str, data: dict[str, float], ts: Optional[str] = Non
     """批量写入一轮采样数据。
 
     data: {param_name: value}
-    过滤 None / NaN 值，避免 NOT NULL 约束失败。
+    NaN / Inf / None 值存为 NULL（保留参数留痕，导出时不丢失该参数列）。
     """
     import math
     if ts is None:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    # 过滤掉 None / NaN / Inf 值
     items = []
     for name, val in data.items():
-        if val is None:
-            continue
-        try:
-            fval = float(val)
-            if math.isnan(fval) or math.isinf(fval):
-                continue
-            items.append((device_id, name, ts, fval))
-        except (ValueError, TypeError):
-            continue
+        store_value = None
+        if val is not None:
+            try:
+                fval = float(val)
+                if not (math.isnan(fval) or math.isinf(fval)):
+                    store_value = fval
+            except (ValueError, TypeError):
+                pass  # 保持 None
+        items.append((device_id, name, ts, store_value))
     if not items:
         return
     conn = _get_conn()
@@ -146,6 +193,39 @@ def get_param_names(device_id: Optional[str] = None) -> list[str]:
                 "SELECT DISTINCT param_name FROM samples ORDER BY param_name"
             ).fetchall()
         return [r["param_name"] for r in rows]
+    finally:
+        conn.close()
+
+
+def stats(
+    device_id: Optional[str] = None,
+    param_name: Optional[str] = None,
+) -> dict:
+    """查询历史数据的统计信息：总条数、最早/最晚时间戳。
+
+    用于 AI 助手回答"有多少条数据、时间跨度"等问题。
+    value 为 NULL 的记录（采到但无效）也计入条数。
+
+    返回 {count, earliest, latest}，无数据时 count=0、时间为 None。
+    """
+    conn = _get_conn()
+    try:
+        sql = "SELECT COUNT(*) AS cnt, MIN(timestamp) AS t_min, MAX(timestamp) AS t_max FROM samples WHERE 1=1"
+        params: list = []
+        if device_id:
+            sql += " AND device_id = ?"
+            params.append(device_id)
+        if param_name:
+            sql += " AND param_name = ?"
+            params.append(param_name)
+        row = conn.execute(sql, params).fetchone()
+        if not row:
+            return {"count": 0, "earliest": None, "latest": None}
+        return {
+            "count": row["cnt"] or 0,
+            "earliest": row["t_min"],
+            "latest": row["t_max"],
+        }
     finally:
         conn.close()
 

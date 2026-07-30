@@ -224,6 +224,8 @@ class ModbusProtocol:
             resp_bytes = self._serial_manager.transact(bytes(frame))
             if resp_bytes is None or len(resp_bytes) == 0:
                 self._log("rx", "TIMEOUT", f"等待 {CONFIG['timeout_ms']}ms 无响应")
+                # 累计请求失败次数（用于稳定的累计丢包率）
+                self._serial_manager.tx_failures += 1
                 return {"type": "timeout"}
             resp = list(resp_bytes)
             hex_resp = " ".join(f"{b:02X}" for b in resp)
@@ -231,6 +233,9 @@ class ModbusProtocol:
             # CRC 校验
             if not verify_crc(resp):
                 self._log("rx", "CRC", "回包校验失败")
+                # 累加 CRC 错误统计（让通信统计与诊断日志一致）
+                self._serial_manager.crc_errors += 1
+                self._serial_manager.tx_failures += 1
                 return {"type": "crc_error", "resp": resp}
             return {"type": "ok", "resp": resp}
 
@@ -276,6 +281,9 @@ class ModbusProtocol:
                 if not verify_crc(result["resp"]):
                     last_error = "CRC 校验失败"
                     self._log("rx", "CRC", "回包校验失败")
+                    # 累加 CRC 错误统计（防御性二次校验，与通信统计保持一致）
+                    if self._serial_manager:
+                        self._serial_manager.crc_errors += 1
                     if attempt < CONFIG["max_retries"]:
                         retried += 1
                         continue

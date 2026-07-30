@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QFrame, QDateTimeEdit, QMessageBox, QFileDialog,
     QSizePolicy, QComboBox, QGridLayout,
 )
-from PySide6.QtCore import Qt, QDateTime, QEvent, QModelIndex, QAbstractItemModel
-from PySide6.QtGui import QColor, QPainter, QWheelEvent
+from PySide6.QtCore import Qt, QDateTime, QEvent, QModelIndex, QAbstractItemModel, QMargins
+from PySide6.QtGui import QColor, QPainter, QWheelEvent, QBrush
 
 from .. import theme
 from ..store import store
@@ -30,47 +30,140 @@ class NoWheelComboBox(QComboBox):
 
 
 class CheckableComboBox(QComboBox):
-    """多选下拉框：点击选项切换勾选，不关闭弹层。
+    """多选下拉框：第一项为"全选/取消全选"，点击选项切换勾选，不关闭弹层。
     触发器显示已选汇总（如"温度、压力"），全不选时显示 placeholder。
+
+    关键：重写 hidePopup，判断鼠标是否点在下拉项上——
+    若是则切换该项勾选且不关闭弹层；否则（点空白/外部）才关闭。
+    QComboBox 默认点击 item 会选中并关闭，必须拦截此行为才能多选。
+    第一项"全选/取消全选"为控制项，不参与业务数据（get_selected 排除它）。
     """
+    # 第一项固定文案，作为全选切换控制项
+    SELECT_ALL_TEXT = "全选/取消全选"
+
     def __init__(self, placeholder: str = "请选择"):
         super().__init__()
         self._placeholder = placeholder
         self.setEditable(True)
         self.setEditText(placeholder)
+        # 记录是否正在通过点击 item 触发隐藏（用于区分"点 item"和"点外部"）
+        self._skip_hide = False
 
     def add_items(self, items: list[str]):
-        """添加选项（默认全选）"""
-        for i, text in enumerate(items):
+        """添加选项（默认全选）。
+
+        第一项插入"全选/取消全选"控制项，其后为实际选项。
+        """
+        # 先插入全选控制项
+        self.addItem(self.SELECT_ALL_TEXT)
+        head = self.model().item(0, 0)
+        head.setCheckState(Qt.CheckState.Checked)  # 默认全选 → 控制项打勾
+        head.setFlags(head.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        # 插入实际选项（默认全选）
+        for text in items:
             self.addItem(text)
+            i = self.count() - 1
             item = self.model().item(i, 0)
             item.setCheckState(Qt.CheckState.Checked)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         self._update_text()
 
     def get_selected(self) -> list[str]:
-        """返回已选项文本列表"""
+        """返回已选的业务项文本列表（排除第一项全选控制项）"""
         result = []
         for i in range(self.count()):
+            if i == 0:  # 跳过全选控制项
+                continue
             item = self.model().item(i, 0)
             if item and item.checkState() == Qt.CheckState.Checked:
                 result.append(item.text())
         return result
 
+    def _all_business_selected(self) -> bool:
+        """判断所有业务项是否全部选中（不含全选控制项）"""
+        for i in range(1, self.count()):
+            item = self.model().item(i, 0)
+            if not item or item.checkState() != Qt.CheckState.Checked:
+                return False
+        return True
+
+    def _sync_select_all_state(self):
+        """根据业务项选中状态，同步全选控制项的勾选（全选则打勾，否则取消）"""
+        head = self.model().item(0, 0)
+        if head:
+            head.setCheckState(
+                Qt.CheckState.Checked if self._all_business_selected() else Qt.CheckState.Unchecked
+            )
+
+    def _toggle_select_all(self):
+        """点击全选控制项：若当前未全选则全选，否则全部取消"""
+        target = (
+            Qt.CheckState.Checked
+            if not self._all_business_selected()
+            else Qt.CheckState.Unchecked
+        )
+        for i in range(1, self.count()):
+            item = self.model().item(i, 0)
+            if item:
+                item.setCheckState(target)
+        # 同步全选控制项显示
+        head = self.model().item(0, 0)
+        if head:
+            head.setCheckState(target)
+        self._update_text()
+
     def _update_text(self):
-        """更新显示文本"""
+        """更新显示文本（汇总，排除全选控制项；全选时显示"全部"避免拥挤）"""
         selected = self.get_selected()
-        if selected:
-            self.setEditText("、".join(selected))
-        else:
+        total = self.count() - 1  # 业务项总数
+        if not selected:
             self.setEditText(self._placeholder)
+        elif len(selected) == total and total > 3:
+            # 选中全部且数量较多时，简洁显示"全部(N项)"
+            self.setEditText(f"全部({total}项)")
+        else:
+            self.setEditText("、".join(selected))
 
     def showPopup(self):
         """弹出"""
         super().showPopup()
 
     def hidePopup(self):
-        """关闭弹层时恢复汇总文本"""
+        """关闭弹层：点 item 时切换勾选不关闭，点外部才关闭。
+
+        通过鼠标全局坐标判断是否落在 popup 的 listview 范围内。
+        点击第一项"全选/取消全选"时，联动设置所有业务项。
+        """
+        # 取下拉弹出的 listview（QComboBox 内部 view）
+        view = self.view()
+        if view is not None and view.isVisible():
+            from PySide6.QtGui import QCursor
+            # view 在全局坐标下的矩形
+            view_global = view.viewport().mapToGlobal(view.viewport().rect().topLeft())
+            from PySide6.QtCore import QRect
+            view_rect = QRect(view_global, view.viewport().size())
+            cursor_pos = QCursor.pos()
+            # 鼠标在下拉项区域内 → 切换当前索引项的勾选，不关闭
+            if view_rect.contains(cursor_pos):
+                index = view.currentIndex()
+                if index.isValid():
+                    item = self.model().item(index.row(), 0)
+                    if item and (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                        # 第一项：全选/取消全选联动
+                        if index.row() == 0:
+                            self._toggle_select_all()
+                        else:
+                            new_state = (
+                                Qt.CheckState.Unchecked
+                                if item.checkState() == Qt.CheckState.Checked
+                                else Qt.CheckState.Checked
+                            )
+                            item.setCheckState(new_state)
+                            self._sync_select_all_state()  # 同步全选控制项显示
+                            self._update_text()
+                # 阻止关闭
+                return
+        # 点外部 → 正常关闭并刷新文本
         super().hidePopup()
         self._update_text()
 
@@ -141,7 +234,10 @@ class HistoryPage(QWidget):
         range_row = QHBoxLayout()
         range_row.setSpacing(6)
         range_lbl = QLabel("时间范围")
-        range_lbl.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; font-weight: {theme.FW_BOLD};")
+        range_lbl.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; font-weight: {theme.FW_BOLD}; padding-top: 3px;")
+        range_lbl.setFixedHeight(28)  # 与按钮同高
+        # 文字在 28px 框内垂直居中（QLabel 默认顶部对齐，会显得偏上）
+        range_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         range_row.addWidget(range_lbl)
 
         self._range_buttons: dict[str, QPushButton] = {}
@@ -251,10 +347,12 @@ class HistoryPage(QWidget):
         hl.addWidget(self.count_tag, alignment=Qt.AlignmentFlag.AlignVCenter)
         cl.addWidget(head)
 
-        # card-body
+        # card-body（内边距归零，让绘图区最大化，与实时监控页一致）
         body = QWidget()
+        body.setObjectName("card-body")
+        body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)  # 让 QSS 背景生效
         bl = QVBoxLayout(body)
-        bl.setContentsMargins(10, 10, 10, 10)
+        bl.setContentsMargins(0, 0, 0, 0)
 
         # 空态提示
         self.empty_label = QLabel('📈  请点击"查询"加载数据')
@@ -265,6 +363,8 @@ class HistoryPage(QWidget):
 
         # QtCharts 容器（初始隐藏，查询后显示）
         self.chart_container = QWidget()
+        self.chart_container.setObjectName("card-body")
+        self.chart_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.chart_container.setVisible(False)
         chart_layout = QVBoxLayout(self.chart_container)
         chart_layout.setContentsMargins(0, 0, 0, 0)
@@ -368,10 +468,14 @@ class HistoryPage(QWidget):
         # 创建图表
         self._chart = QChart()
         self._chart.legend().hide()
+        # 四周边距全部归零，绘图区最大化（与实时监控页一致）
         self._chart.layout().setContentsMargins(0, 0, 0, 0)
+        self._chart.setMargins(QMargins(0, 0, 0, 0))
+        # 外层透明（融入卡片白底）
         self._chart.setBackgroundVisible(False)
+        # 绘图区：浅蓝底（原型 .chart #fbfdff），无边框（NoPen 去掉灰线）
         self._chart.setPlotAreaBackgroundVisible(True)
-        self._chart.setPlotAreaBackgroundBrush(__import__("PySide6.QtGui", fromlist=["QBrush"]).QBrush(QColor("#fbfdff")))
+        self._chart.setPlotAreaBackgroundBrush(QBrush(QColor("#fbfdff")))
         from PySide6.QtGui import QPen
         self._chart.setPlotAreaBackgroundPen(QPen(Qt.PenStyle.NoPen))
 
@@ -384,7 +488,7 @@ class HistoryPage(QWidget):
         self._axis_x.setTitleText("时间")
         self._axis_x.setGridLineColor(QColor(grid))
         self._axis_x.setLabelsColor(QColor(theme.HEX["MUTED"]))
-        self._axis_x.setTitleBrush(__import__("PySide6.QtGui", fromlist=["QBrush"]).QBrush(QColor(theme.HEX["MUTED"])))
+        self._axis_x.setTitleBrush(QBrush(QColor(theme.HEX["MUTED"])))
         self._chart.addAxis(self._axis_x, Qt.AlignmentFlag.AlignBottom)
 
         # Y 轴：数值
@@ -392,13 +496,66 @@ class HistoryPage(QWidget):
         self._axis_y.setTickCount(5)
         self._axis_y.setGridLineColor(QColor(grid))
         self._axis_y.setLabelsColor(QColor(theme.HEX["MUTED"]))
+        self._axis_y.setTitleBrush(QBrush(QColor(theme.HEX["MUTED"])))  # 标题颜色（单参数时显示）
         self._chart.addAxis(self._axis_y, Qt.AlignmentFlag.AlignLeft)
 
-        # 按参数名分组数据
+        # 按参数名分组数据（一次遍历，避免 O(N×M) 重复扫描）
         all_params = store.sample_params()
         name_to_idx = {p["name"]: i for i, p in enumerate(all_params)}
 
+        # 收集每个参数的所有点（跳过 NULL 值）。
+        # 用 datetime.strptime 解析时间戳（比 QDateTime.fromString 快几十倍），
+        # 同时记录全局 min/max 时间戳和 Y 值，供坐标轴范围直接复用，避免二次遍历。
+        from datetime import datetime as _dt
         from PySide6.QtCore import QPointF
+        grouped: dict[str, list[tuple[float, float]]] = {name: [] for name in param_names}
+        min_ts: int | None = None
+        max_ts: int | None = None
+        y_lo: float | None = None
+        y_hi: float | None = None
+        for row in rows:
+            name = row["param_name"]
+            if name not in grouped:
+                continue
+            val = row["value"]
+            if val is None:
+                continue  # 采到但无效，曲线断开此点
+            # 时间戳解析：兼容带/不带毫秒两种格式（毫秒不足 3 位补齐）
+            ts_str = row["timestamp"]
+            try:
+                if "." in ts_str:
+                    # 带毫秒：补齐到 6 位微秒以满足 strptime %f
+                    head, _, frac = ts_str.partition(".")
+                    frac = (frac + "000000")[:6]
+                    parsed = _dt.strptime(f"{head}.{frac}", "%Y-%m-%d %H:%M:%S.%f")
+                else:
+                    parsed = _dt.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                ts_ms = int(parsed.timestamp() * 1000)
+            except ValueError:
+                continue  # 时间格式异常，跳过该点
+            grouped[name].append((float(ts_ms), float(val)))
+            # 更新全局范围（一次遍历内完成，供坐标轴复用）
+            if min_ts is None or ts_ms < min_ts:
+                min_ts = ts_ms
+            if max_ts is None or ts_ms > max_ts:
+                max_ts = ts_ms
+            if y_lo is None or val < y_lo:
+                y_lo = val
+            if y_hi is None or val > y_hi:
+                y_hi = val
+
+        # 单参数最大点数：超过则等间隔降采样（曲线趋势不变，绘制量大幅下降）
+        MAX_POINTS = 200
+
+        def _downsample(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+            """等间隔抽样：保留首尾点，中间按步长取点，曲线形状不变形"""
+            n = len(pts)
+            if n <= MAX_POINTS:
+                return pts
+            step = n / MAX_POINTS
+            indices = sorted(set(int(i * step) for i in range(MAX_POINTS)) | {n - 1})
+            return [pts[i] for i in indices]
+
         for name in param_names:
             series = QLineSeries()
             idx = name_to_idx.get(name, 0)
@@ -408,41 +565,43 @@ class HistoryPage(QWidget):
             pen.setWidthF(1.6)
             series.setPen(pen)
 
-            # 添加数据点
-            pts = []
-            for row in rows:
-                if row["param_name"] == name:
-                    dt = QDateTime.fromString(row["timestamp"], "yyyy-MM-dd HH:mm:ss.zzz")
-                    if not dt.isValid():
-                        dt = QDateTime.fromString(row["timestamp"], "yyyy-MM-dd HH:mm:ss")
-                    ts_ms = dt.toMSecsSinceEpoch()
-                    pts.append(QPointF(float(ts_ms), float(row["value"])))
+            # 降采样后转 QPointF（避免 QtCharts 绘制过多点导致卡顿）
+            sampled = _downsample(grouped[name])
+            pts = [QPointF(x, y) for x, y in sampled]
             if pts:
                 series.replace(pts)
                 self._chart.addSeries(series)
                 series.attachAxis(self._axis_x)
                 series.attachAxis(self._axis_y)
 
-        # X 轴范围
-        if rows:
-            times = []
-            for row in rows:
-                dt = QDateTime.fromString(row["timestamp"], "yyyy-MM-dd HH:mm:ss.zzz")
-                if not dt.isValid():
-                    dt = QDateTime.fromString(row["timestamp"], "yyyy-MM-dd HH:mm:ss")
-                times.append(dt)
-            self._axis_x.setRange(min(times), max(times))
+        # X 轴范围（复用分组时记录的 min/max 时间戳，无需二次遍历解析）
+        if min_ts is not None and max_ts is not None:
+            self._axis_x.setRange(
+                QDateTime.fromMSecsSinceEpoch(min_ts),
+                QDateTime.fromMSecsSinceEpoch(max_ts),
+            )
 
-        # Y 轴范围（自动）
-        values = [row["value"] for row in rows]
-        if values:
-            lo, hi = min(values), max(values)
-            margin = (hi - lo) * 0.1 if hi > lo else 1
-            self._axis_y.setRange(lo - margin, hi + margin)
+        # Y 轴标题：仅 1 个参数时显示"名称 (单位)"，与实时监控页一致；
+        # 2 个及以上参数单位可能不同，不显示标题。
+        if len(param_names) == 1:
+            p = next((x for x in all_params if x["name"] == param_names[0]), {})
+            display = p.get("display", "") or p.get("name", "")
+            unit = p.get("unit", "")
+            self._axis_y.setTitleText(f"{display} ({unit})" if unit else display)
+        else:
+            self._axis_y.setTitleText("")
+
+        # Y 轴范围（复用分组时记录的 min/max Y 值，无需二次遍历）
+        if y_lo is not None and y_hi is not None:
+            margin = (y_hi - y_lo) * 0.1 if y_hi > y_lo else 1
+            self._axis_y.setRange(y_lo - margin, y_hi + margin)
 
         self._chart_view = QChartView(self._chart)
         self._chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._chart_view.setFrameShape(QFrame.Shape.NoFrame)
+        # 图表视图白底：chart 本身透明，view 不设白底会透出页面灰色
+        self._chart_view.setStyleSheet("background: #ffffff; border: none;")
+        self._chart_view.setBackgroundBrush(QBrush(QColor("#ffffff")))
         self.chart_container.layout().addWidget(self._chart_view)
 
     # ===== 导出 =====
@@ -468,10 +627,11 @@ class HistoryPage(QWidget):
         return f"{date_part}.{ms_part}"
 
     def _export(self):
-        """导出 CSV
+        """导出 CSV（宽表格式）
 
-        时间列始终为完整日期时间 YYYY-MM-DD HH:MM:SS.mmm，
-        并用 Excel 友好的 ="..." 写法避免被自动识别为时间类型导致毫秒丢失。
+        每个时间戳一行，每个参数一列，便于在同一行查看同一时刻的多个采样值。
+        时间列用 ="..." 写法避免被 Excel 自动识别为时间类型导致毫秒丢失。
+        表头示例：时间 | 温度(°C) | 压力(MPa) | 流量(m³/h)
         """
         rows = self._last_rows
         if not rows:
@@ -484,34 +644,67 @@ class HistoryPage(QWidget):
             return
 
         try:
-            # 设备 ID → 名称映射
-            device_map = {d["id"]: d.get("name", "") or d["id"] for d in store.devices}
-            # 参数名 → {display, unit, address} 映射
+            # 参数名 → (display, unit) 映射
             param_map = {
                 p["name"]: {
                     "display": p.get("display", "") or p["name"],
                     "unit": p.get("unit", "") or "",
-                    "address": p.get("address", "") or "",
                 }
                 for p in store.sample_params()
             }
 
+            # 1. 收集所有出现的参数名（保持查询选中的顺序）
+            seen_params: list[str] = []
+            param_set: set[str] = set()
+            for row in rows:
+                name = row["param_name"]
+                if name not in param_set:
+                    param_set.add(name)
+                    seen_params.append(name)
+
+            # 2. 按时间戳分组：{timestamp: {param_name: value}}
+            # 用列表保持时间先后顺序（rows 已按时间升序排列）
+            time_order: list[str] = []
+            time_map: dict[str, dict[str, float]] = {}
+            for row in rows:
+                ts = self._normalize_ts(row.get("timestamp", ""))
+                if ts not in time_map:
+                    time_map[ts] = {}
+                    time_order.append(ts)
+                time_map[ts][row["param_name"]] = row["value"]
+
+            # 3. 构造表头：时间 | 参数名(单位) | ...
+            #    表头右填充全角空格撑宽列，Excel 默认列宽即可显示完整内容，
+            #    避免用户每次打开都要手动拉宽列。
+            FULLWIDTH_SPACE = "　"  # U+3000，Excel 中占一个汉字宽度，撑宽最稳
+            header = ["时间" + FULLWIDTH_SPACE * 12]  # 容纳 ="2026-07-30 10:00:00.000"
+            for name in seen_params:
+                pinfo = param_map.get(name, {})
+                display = pinfo.get("display", name)
+                unit = pinfo.get("unit", "")
+                label = f"{display}({unit})" if unit else display
+                # 填充到容纳标签 + 数值(如 -12.3456)的宽度，最少 4 个全角空格
+                pad = max(4, 12 - len(label))
+                header.append(label + FULLWIDTH_SPACE * pad)
+
+            # 4. 写入：每个时间戳一行，NULL 值（采到但无效）显示为 NaN，未采样留空
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
-                writer.writerow(["时间", "设备", "参数", "数值", "单位", "地址"])
-                for row in rows:
-                    pinfo = param_map.get(row["param_name"], {})
-                    ts = self._normalize_ts(row.get("timestamp", ""))
-                    # ="..." 写法：Excel 不会自动按日期类型解析，完整字符串原样显示
-                    ts_cell = f'="{ts}"'
-                    writer.writerow([
-                        ts_cell,
-                        device_map.get(store.current_device_id, store.current_device_id or ""),
-                        pinfo.get("display", row["param_name"]),
-                        f"{row['value']:.4f}",
-                        pinfo.get("unit", ""),
-                        pinfo.get("address", ""),
-                    ])
-            QMessageBox.information(self, "导出成功", f"已导出 {len(rows)} 条到\n{path}")
+                writer.writerow(header)
+                for ts in time_order:
+                    line = [f'="{ts}"']  # ="..." 防止 Excel 自动转日期类型
+                    vals = time_map[ts]
+                    for name in seen_params:
+                        v = vals.get(name)
+                        if v is None:
+                            line.append("NaN")  # 采到了但值无效（NULL）
+                        else:
+                            line.append(f"{v:.4f}")
+                    writer.writerow(line)
+
+            QMessageBox.information(
+                self, "导出成功",
+                f"已导出 {len(time_order)} 个时间点 × {len(seen_params)} 个参数到\n{path}"
+            )
         except Exception as e:
             QMessageBox.warning(self, "导出失败", str(e))

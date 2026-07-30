@@ -25,6 +25,7 @@ class AIAssistantPage(QWidget):
     def __init__(self):
         super().__init__()
         self._worker: LLMWorker | None = None
+        self._current_question: str = ""  # 当前用户问题，供工具结果总结时引用
         self._thinking_timer: QTimer | None = None
         self._thinking_dots = 0
         self._build_ui()
@@ -285,6 +286,8 @@ class AIAssistantPage(QWidget):
             QMessageBox.warning(self, "未配置模型", "请先在模型配置页添加并启用 AI 模型")
             return
 
+        # 记录当前用户问题，供 summarize 阶段引用（让 LLM 针对问题作答）
+        self._current_question = text
         self.input_box.clear()
         self._add_bubble("user", text)
         store.ai_messages.append({"role": "user", "content": text})
@@ -321,10 +324,10 @@ class AIAssistantPage(QWidget):
                 status = "done" if tool_result["ok"] else "error"
                 self._update_tool_card(status, tool_result.get("summary", ""))
 
-                # 二次调 LLM 总结
+                # 二次调 LLM 总结（传入用户原始问题，让 LLM 针对问题作答）
                 self._start_thinking()
                 self._worker = LLMWorker()
-                self._worker.request_summarize(name, tool_result)
+                self._worker.request_summarize(name, tool_result, self._current_question)
                 self._worker.finished_signal.connect(self._on_llm_response)
                 self._worker.start()
             else:
