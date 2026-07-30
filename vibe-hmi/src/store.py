@@ -10,8 +10,10 @@ import json
 import os
 from typing import Optional
 
-# 文件路径
-_config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
+from . import paths
+
+# 文件路径(开发模式=项目根/config,打包模式=exe 同级/config)
+_config_dir = os.path.join(paths.app_root(), "config")
 PARAMS_FILE = os.path.join(_config_dir, "params.json")
 DEVICES_FILE = os.path.join(_config_dir, "devices.json")
 HISTORY_FILE = os.path.join(_config_dir, "send_history.json")

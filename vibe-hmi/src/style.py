@@ -7,13 +7,14 @@ QSS 不支持 CSS 变量，色值从 theme.py 的 HEX 字典读取后拼接成 Q
 用法：在 app.py 里读 theme.py 颜色 → 调 build_qss() → app.setStyleSheet()
 """
 from . import theme
+from . import paths
 
 
 def build_qss() -> str:
     """生成全局 QSS 字符串"""
     import os
-    # 箭头 SVG 的绝对路径（相对本文件定位）
-    arrow_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "arrow-down.svg")
+    # 箭头 SVG 路径(只读资源:开发模式=项目根,打包模式=_MEIPASS)
+    arrow_path = os.path.join(paths.resource_root(), "assets", "icons", "arrow-down.svg")
     arrow_path = arrow_path.replace("\\", "/")  # QSS 用正斜杠
 
     c = theme.HEX

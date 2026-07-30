@@ -13,6 +13,34 @@ cd vibe-hmi
 .venv\Scripts\python.exe main.py
 ```
 
+## 打包发布（生成无依赖 exe）
+
+将上位机打包成可在**无 Python 环境**的 Windows PC 上直接运行的程序。
+
+```bash
+cd vibe-hmi
+build.bat
+```
+
+产物：`vibe-hmi/dist/vibe-hmi/`（约 316 MB），双击 `vibe-hmi.exe` 即可启动。
+
+**分发方式**：把整个 `dist/vibe-hmi/` 文件夹压缩成 zip，拷贝到目标电脑解压，
+双击 `vibe-hmi.exe` 运行。目标机无需安装 Python 或任何依赖。
+
+**用户数据位置**（首次运行在 exe 同级自动创建）：
+
+| 目录 | 内容 |
+| :--- | :--- |
+| `config/` | 设备/参数/策略/模型配置（JSON） |
+| `save/` | 历史采样数据库（SQLite） |
+| `history/` | 串口日志（TXT） |
+
+如需重置应用，删除这三个目录后重启即可。
+
+> 打包说明：PyInstaller onedir 模式，自动收集 PySide6/QtCharts/QtSvg/pyserial，
+> 排除未使用的 pandas/pymodbus/WebEngine 等大模块以压缩体积。
+> 详见 `vibe-hmi/vibe-hmi.spec` 和 `vibe-hmi/build.bat`。
+
 ## 入口导航
 
 | 入口 | 说明 |
@@ -36,12 +64,15 @@ cd vibe-hmi
 
 ## 项目结构
 
-```
+```text
 vibe-hmi/
 ├── main.py                 # 入口
+├── build.bat               # 一键打包脚本（PyInstaller）
+├── vibe-hmi.spec           # PyInstaller 打包配置
 ├── config/                 # 运行时配置（params/devices/policy/model_config）
 ├── save/                   # SQLite 历史数据库
 ├── src/
+│   ├── paths.py            # 路径解析（开发/打包双模式感知）
 │   ├── theme.py            # 设计令牌
 │   ├── style.py            # 全局 QSS
 │   ├── store.py            # 全局状态管理

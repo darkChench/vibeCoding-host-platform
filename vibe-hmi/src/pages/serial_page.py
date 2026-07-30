@@ -20,10 +20,11 @@ from datetime import datetime
 
 from .. import theme
 from ..store import store
+from .. import paths
 from ..serial.serial_manager import serial_manager
 
-# 日志文件保存目录（应用根目录下的 history/）
-HISTORY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "history")
+# 日志文件保存目录（开发模式=项目根/history,打包模式=exe 同级/history）
+HISTORY_DIR = os.path.join(paths.app_root(), "history")
 # 日志大小阈值（10MB），超过自动保存为 txt
 LOG_SIZE_THRESHOLD = 10 * 1024 * 1024
 

@@ -1,0 +1,129 @@
+@echo off
+REM ============================================================
+REM  vibe-hmi build script (PyInstaller onedir)
+REM  Output: dist\vibe-hmi\vibe-hmi.exe
+REM
+REM  Uses .venv python (PySide6 is installed in venv,
+REM  system python has no PySide6 -> collect_all would fail)
+REM ============================================================
+
+cd /d "%~dp0"
+
+REM ----- locate venv python -----
+set "PY=.venv\Scripts\python.exe"
+if not exist "%PY%" (
+    echo [ERROR] .venv\Scripts\python.exe not found
+    echo         Please create venv and install deps first:
+    echo           python -m venv .venv
+    echo           .venv\Scripts\python -m pip install -r requirements.txt
+    exit /b 1
+)
+
+echo.
+echo ============================================================
+echo   vibe-hmi build
+echo ============================================================
+echo.
+
+REM ----- 1. clean old output -----
+echo [1/5] Cleaning old build artifacts...
+if exist build rmdir /s /q build
+if exist dist rmdir /s /q dist
+if exist vibe-hmi.spec.bak del /q vibe-hmi.spec.bak
+echo     done
+echo.
+
+REM ----- 2. check PyInstaller -----
+echo [2/5] Checking PyInstaller...
+"%PY%" -c "import PyInstaller" || (
+    echo     PyInstaller not installed, installing into venv...
+    "%PY%" -m pip install --upgrade pyinstaller || (
+        echo [ERROR] PyInstaller install failed
+        exit /b 1
+    )
+)
+"%PY%" -c "import PyInstaller; print('    PyInstaller version:', PyInstaller.__version__)"
+echo.
+
+REM ----- 3. check runtime deps -----
+echo [3/5] Checking runtime deps...
+"%PY%" -c "import PySide6, serial, requests" || (
+    echo [ERROR] missing deps in venv ^(PySide6 / pyserial / requests^)
+    echo        run: .venv\Scripts\python -m pip install -r requirements.txt
+    exit /b 1
+)
+echo     PySide6 / pyserial / requests OK
+echo.
+
+REM ----- 4. build -----
+echo [4/5] Building (2-4 minutes)...
+echo.
+"%PY%" -m PyInstaller vibe-hmi.spec --noconfirm
+if errorlevel 1 (
+    echo.
+    echo [ERROR] build failed, see log above
+    exit /b 1
+)
+echo.
+
+REM ----- 5. verify + size optimization -----
+echo [5/5] Verifying output and optimizing size...
+if not exist "dist\vibe-hmi\vibe-hmi.exe" (
+    echo [ERROR] dist\vibe-hmi\vibe-hmi.exe not found
+    exit /b 1
+)
+
+REM critical DLL check
+if not exist "dist\vibe-hmi\_internal\PySide6\Qt6Charts.dll" (
+    echo [WARN] Qt6Charts.dll missing, trend charts may not render
+)
+if not exist "dist\vibe-hmi\_internal\PySide6\plugins\platforms\qwindows.dll" (
+    echo [WARN] qwindows.dll missing, app may crash with black screen
+)
+
+REM ===== CONSERVATIVE size optimization =====
+REM Only remove files we are 100% sure are unused. QtCharts/QtSvg depend on
+REM other Qt6 modules, so we keep ALL Qt6*.dll. We only delete the clearly
+REM standalone WebEngine (Chromium, ~200MB) and FFmpeg codecs.
+echo.
+echo     Removing only confirmed-unused large files (WebEngine / FFmpeg)...
+set "PYSIDE_DIR=dist\vibe-hmi\_internal\PySide6"
+
+REM WebEngine core (Chromium ~196MB) - we have no web view
+for %%P in (Qt6WebEngineCore Qt6WebEngineQuick Qt6WebEngineWidgets Qt6Pdf Qt6PdfWidgets) do (
+    if exist "%PYSIDE_DIR%\%%P.dll" del /q "%PYSIDE_DIR%\%%P.dll"
+)
+REM WebEngine resources (~100MB)
+if exist "%PYSIDE_DIR%\resources" rmdir /s /q "%PYSIDE_DIR%\resources"
+REM WebEngine processes helper
+for %%D in (QtWebEngineProcess) do (
+    if exist "%PYSIDE_DIR%\%%D.exe" del /q "%PYSIDE_DIR%\%%D.exe"
+)
+REM FFmpeg codecs (~50MB) - only used by QtMultimedia
+for %%P in (avcodec-61 avformat-61 avutil-59 swscale-6 swresample-4) do (
+    if exist "%PYSIDE_DIR%\%%P.dll" del /q "%PYSIDE_DIR%\%%P.dll"
+)
+echo     done
+
+REM compute final size
+echo | set /p=    Final size: >nul
+powershell -NoProfile -Command "[math]::Round((Get-ChildItem -Recurse -Path 'dist\vibe-hmi' | Measure-Object -Property Length -Sum).Sum/1MB, 1)" 2>nul
+echo     MB
+
+echo.
+echo ============================================================
+echo   BUILD SUCCESS
+echo ============================================================
+echo.
+echo   Output dir:  %CD%\dist\vibe-hmi\
+echo   Launcher:    %CD%\dist\vibe-hmi\vibe-hmi.exe
+echo.
+echo   Distribution: zip the whole dist\vibe-hmi\ folder,
+echo                 copy to target PC, unzip, double-click vibe-hmi.exe
+echo                 (target PC needs no Python or any dependency)
+echo.
+echo   Notes:
+echo     - On first run, config\ save\ history\ dirs are auto-created
+echo       next to the exe (user data: device config, history DB, serial log)
+echo     - To reset, delete those 3 dirs and restart
+echo.

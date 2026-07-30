@@ -14,8 +14,10 @@ import os
 from datetime import datetime
 from typing import Optional
 
-# 数据库文件路径
-_DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "save")
+from . import paths
+
+# 数据库文件路径(开发模式=项目根/save,打包模式=exe 同级/save)
+_DB_DIR = os.path.join(paths.app_root(), "save")
 DB_PATH = os.path.join(_DB_DIR, "history.db")
 
 

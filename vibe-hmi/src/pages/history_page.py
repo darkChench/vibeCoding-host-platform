@@ -447,8 +447,32 @@ class HistoryPage(QWidget):
 
     # ===== 导出 =====
 
+    @staticmethod
+    def _normalize_ts(ts: str) -> str:
+        """将 timestamp 统一为完整 ISO 格式 YYYY-MM-DD HH:MM:SS.mmm。
+
+        兼容三种输入：带毫秒、不带毫秒、ISO 'T' 分隔符。
+        """
+        if not ts:
+            return ""
+        s = ts.strip().replace("T", " ")
+        # 无毫秒 → 补 .000
+        if "." not in s:
+            return f"{s}.000"
+        # 毫秒位数不足 3 位 → 右侧补零
+        date_part, _, ms_part = s.partition(".")
+        if len(ms_part) < 3:
+            ms_part = ms_part.ljust(3, "0")
+        else:
+            ms_part = ms_part[:3]
+        return f"{date_part}.{ms_part}"
+
     def _export(self):
-        """导出 CSV"""
+        """导出 CSV
+
+        时间列始终为完整日期时间 YYYY-MM-DD HH:MM:SS.mmm，
+        并用 Excel 友好的 ="..." 写法避免被自动识别为时间类型导致毫秒丢失。
+        """
         rows = self._last_rows
         if not rows:
             QMessageBox.warning(self, "导出", "请先查询数据")
@@ -460,15 +484,33 @@ class HistoryPage(QWidget):
             return
 
         try:
-            name_map = {p["name"]: p.get("display", "") or p["name"] for p in store.sample_params()}
+            # 设备 ID → 名称映射
+            device_map = {d["id"]: d.get("name", "") or d["id"] for d in store.devices}
+            # 参数名 → {display, unit, address} 映射
+            param_map = {
+                p["name"]: {
+                    "display": p.get("display", "") or p["name"],
+                    "unit": p.get("unit", "") or "",
+                    "address": p.get("address", "") or "",
+                }
+                for p in store.sample_params()
+            }
+
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
-                writer.writerow(["时间", "参数", "数值"])
+                writer.writerow(["时间", "设备", "参数", "数值", "单位", "地址"])
                 for row in rows:
+                    pinfo = param_map.get(row["param_name"], {})
+                    ts = self._normalize_ts(row.get("timestamp", ""))
+                    # ="..." 写法：Excel 不会自动按日期类型解析，完整字符串原样显示
+                    ts_cell = f'="{ts}"'
                     writer.writerow([
-                        row["timestamp"],
-                        name_map.get(row["param_name"], row["param_name"]),
+                        ts_cell,
+                        device_map.get(store.current_device_id, store.current_device_id or ""),
+                        pinfo.get("display", row["param_name"]),
                         f"{row['value']:.4f}",
+                        pinfo.get("unit", ""),
+                        pinfo.get("address", ""),
                     ])
             QMessageBox.information(self, "导出成功", f"已导出 {len(rows)} 条到\n{path}")
         except Exception as e:
