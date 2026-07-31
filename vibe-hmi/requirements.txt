@@ -7,3 +7,4 @@ pyserial==3.5            # 串口访问（import serial）
 pymodbus==3.13.1         # Modbus RTU/TCP 协议
 pandas==3.0.3            # 数据处理/CSV/Excel 导出
 openpyxl==3.1.5          # Excel 读写（pandas 引擎之一）
+requests==2.34.2         # HTTP 客户端（AI 助手调用 LLM 接口）
