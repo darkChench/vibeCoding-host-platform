@@ -24,6 +24,7 @@ PROVIDER_PRESETS = [
     {"provider": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
     {"provider": "智谱GLM", "base_url": "https://open.bigmodel.cn/api/anthropic", "model": "glm-4.6"},
     {"provider": "Moonshot", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
+    {"provider": "MiniMax", "base_url": "https://api.MiniMax.io/v1", "model": "MiniMax-Text-01"},
 ]
 
 COLS = ["", "提供商", "Base URL", "模型", "API Key", "启用"]
