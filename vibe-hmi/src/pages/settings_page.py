@@ -8,12 +8,13 @@
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QMessageBox,
+    QFrame, QMessageBox, QLineEdit,
 )
 from PySide6.QtCore import Qt, QTimer
 from datetime import datetime
 
 from .. import theme
+from ..store import store
 
 
 class SettingsPage(QWidget):
@@ -47,6 +48,8 @@ class SettingsPage(QWidget):
         row.addWidget(self._build_info_card())
         row.addWidget(self._build_maint_card())
         layout.addLayout(row)
+        # 第二行：数据管理（历史数据保留策略）
+        layout.addWidget(self._build_data_card())
         layout.addStretch()
 
     def _build_info_card(self) -> QFrame:
@@ -121,6 +124,117 @@ class SettingsPage(QWidget):
 
         cl.addWidget(body, 1)
         return card
+
+    def _build_data_card(self) -> QFrame:
+        """卡片C 数据管理：历史数据保留策略 + 当前数据量 + 手动清理"""
+        from ..history_db import get_record_count
+        card = QFrame()
+        card.setObjectName("card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        cl.addWidget(self._make_head("数据管理", "SQLite", "ok"))
+
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(14, 14, 14, 14)
+        bl.setSpacing(10)
+
+        # 当前数据量
+        self._db_count_label = QLabel()
+        self._db_count_label.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt;")
+        self._refresh_db_count()
+        bl.addWidget(self._db_count_label)
+        bl.addSpacing(4)  # 与下方保留天数行拉开间距，避免输入框上沿被压
+
+        # 保留天数配置行
+        retention_row = QHBoxLayout()
+        retention_row.setSpacing(8)
+        lbl = QLabel("历史数据保留")
+        lbl.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-weight: {theme.FW_BOLD}; padding-top: 1px;")
+        lbl.setFixedHeight(28)  # 与输入框同高，垂直居中对齐
+        retention_row.addWidget(lbl)
+
+        from ..store import store
+        # 保留天数用文本输入框（QSpinBox 上下箭头丑且占宽）
+        self.edit_retention = QLineEdit()
+        days = int(store.policy.get("history_retention_days", 90))
+        self.edit_retention.setText(str(days))
+        self.edit_retention.setPlaceholderText("0 = 永久保留")
+        self.edit_retention.setFixedHeight(28)
+        self.edit_retention.setMaximumWidth(100)
+        # 只允许输入非负整数（用正则校验器）
+        from PySide6.QtGui import QIntValidator
+        self.edit_retention.setValidator(QIntValidator(0, 99999, self))
+        retention_row.addWidget(self.edit_retention)
+
+        unit_lbl = QLabel("天（0 = 永久保留，超期自动清理）")
+        unit_lbl.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; padding-top: 1px;")
+        retention_row.addWidget(unit_lbl)
+        retention_row.addStretch()
+        bl.addLayout(retention_row)
+
+        # 按钮行：保存策略 + 立即清理
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        self.btn_save_retention = QPushButton("保存策略")
+        self.btn_save_retention.clicked.connect(self._save_retention)
+        self.btn_purge_now = QPushButton("立即清理过期数据")
+        self.btn_purge_now.setProperty("variant", "secondary")
+        self.btn_purge_now.clicked.connect(self._purge_now)
+        btn_row.addWidget(self.btn_save_retention)
+        btn_row.addWidget(self.btn_purge_now)
+        btn_row.addStretch()
+        bl.addLayout(btn_row)
+
+        cl.addWidget(body, 1)
+        return card
+
+    def _refresh_db_count(self):
+        """刷新当前数据量显示"""
+        try:
+            from ..history_db import get_record_count
+            cnt = get_record_count()
+            self._db_count_label.setText(f"当前历史数据库：{cnt:,} 条记录")
+        except Exception:
+            self._db_count_label.setText("当前历史数据库：读取失败")
+
+    def _get_retention_days(self) -> int:
+        """从输入框读取保留天数，空值或非法值回退默认 90"""
+        text = self.edit_retention.text().strip()
+        if not text:
+            return 90
+        try:
+            return int(text)
+        except ValueError:
+            return 90
+
+    def _save_retention(self):
+        """保存保留天数到 policy.json"""
+        days = self._get_retention_days()
+        store.policy["history_retention_days"] = days
+        store.save_policy()
+        # 同步回输入框（规范化显示）
+        self.edit_retention.setText(str(days))
+        tip = "永久保留（不自动清理）" if days == 0 else f"保留 {days} 天，超期自动清理"
+        QMessageBox.information(self, "策略已保存", f"历史数据保留策略：{tip}")
+
+    def _purge_now(self):
+        """立即按当前保留天数清理过期数据"""
+        days = self._get_retention_days()
+        if days == 0:
+            QMessageBox.information(self, "无需清理", "当前策略为永久保留（0 天），没有数据会被清理。")
+            return
+        reply = QMessageBox.question(
+            self, "确认清理",
+            f"将删除 {days} 天前的所有历史数据，此操作不可恢复。\n确认清理？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            from ..history_db import purge_expired
+            deleted = purge_expired(days)
+            self._refresh_db_count()
+            QMessageBox.information(self, "清理完成", f"已删除 {deleted:,} 条过期数据")
 
     # ===== 操作 =====
 

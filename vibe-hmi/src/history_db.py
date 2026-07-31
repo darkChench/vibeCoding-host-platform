@@ -11,7 +11,7 @@
 """
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from . import paths
@@ -258,5 +258,31 @@ def clear_all():
         conn.execute("DELETE FROM samples")
         conn.execute("VACUUM")  # 压缩数据库文件
         conn.commit()
+    finally:
+        conn.close()
+
+
+def purge_expired(retention_days: int) -> int:
+    """删除超过保留天数的过期数据，返回删除条数。
+
+    按当前时间往前推 retention_days 天作为截止线，早于此时间的记录删除。
+    retention_days <= 0 表示永久保留，直接返回 0 不做任何操作。
+    删除后执行 VACUUM 压缩数据库文件，释放磁盘空间。
+
+    用于应用启动时和定期清理，控制数据库无限增长。
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM samples WHERE timestamp < ?", (cutoff,))
+        deleted = cur.rowcount
+        conn.commit()
+        # 有删除才 VACUUM（VACUUM 会重写整个数据库文件，较耗时，避免无意义执行）
+        if deleted > 0:
+            conn.execute("VACUUM")
+        conn.commit()
+        return deleted
     finally:
         conn.close()

@@ -49,6 +49,27 @@ class MainWindow(QMainWindow):
         # 串口连接标签初始为"未连接"
         self.sidebar.update_tag("serial", "未连接", "warn")
         self._sync_ai_status()  # 启动时同步 AI 状态
+        # 启动后延迟清理过期历史数据（避免 VACUUM 阻塞启动）
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(3000, self._purge_expired_history)
+
+    def _purge_expired_history(self):
+        """按保留天数策略清理过期历史数据（启动 3 秒后执行一次）。
+
+        从 config/policy.json 读 history_retention_days，超期的记录删除并 VACUUM 压缩。
+        retention <= 0 表示永久保留，跳过。
+        """
+        try:
+            from .history_db import purge_expired
+            days = int(store.policy.get("history_retention_days", 90))
+            deleted = purge_expired(days)
+            if deleted > 0:
+                self.statusBar().showMessage(
+                    f"已自动清理 {deleted} 条过期历史数据（保留 {days} 天）", 5000
+                )
+        except Exception:
+            # 清理失败不影响主程序运行
+            pass
 
     def _sync_ai_status(self):
         """同步状态栏 + 侧边栏 AI 配置状态"""

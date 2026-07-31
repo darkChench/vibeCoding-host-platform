@@ -20,12 +20,14 @@ HISTORY_FILE = os.path.join(_config_dir, "send_history.json")
 POLICY_FILE = os.path.join(_config_dir, "policy.json")
 MODEL_CONFIG_FILE = os.path.join(_config_dir, "model_config.json")
 
-# 默认离线判定策略
+# 默认离线判定策略 + 历史数据保留策略
 DEFAULT_POLICY = {
     "enable": True,
     "timeout": 10,
     "unit": "分钟",
     "scope": "全部设备",
+    # 历史数据保留天数：超过此天数的采样记录自动删除，0 表示永久保留
+    "history_retention_days": 90,
 }
 
 # 默认参数表（首次运行或配置丢失时回退，挂在默认设备 dev-001 下）
