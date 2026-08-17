@@ -74,11 +74,15 @@ class AlarmsPage(QWidget):
         self.btn_ack_all = QPushButton("确认全部未确认")
         self.btn_ack_all.setProperty("variant", "secondary")
         self.btn_ack_all.clicked.connect(self._ack_all)
+        self.btn_delete = QPushButton("删除选中")
+        self.btn_delete.setProperty("variant", "secondary")
+        self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_export = QPushButton("导出报警")
         self.btn_export.setProperty("variant", "secondary")
         self.btn_export.clicked.connect(self._export)
         btn_row.addWidget(self.btn_ack)
         btn_row.addWidget(self.btn_ack_all)
+        btn_row.addWidget(self.btn_delete)
         btn_row.addWidget(self.btn_export)
         btn_row.addStretch()
         bl.addLayout(btn_row)
@@ -120,14 +124,14 @@ class AlarmsPage(QWidget):
         self._header_cb = header_cb
 
         for row, a in enumerate(alarms):
-            # checkbox（已确认行 disabled）
+            # checkbox：所有行都可勾选（已确认行也可勾选用于删除）
             acked = a.get("acknowledged", False)
             cb_container = QWidget()
             cbl = QHBoxLayout(cb_container)
             cbl.setContentsMargins(0, 0, 0, 0)
             cbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cb = QCheckBox()
-            cb.setEnabled(not acked)
+            cb.setEnabled(True)  # 已确认行也允许勾选（用于删除）
             cb.stateChanged.connect(self._update_btn_state)
             cbl.addWidget(cb)
             self.table.setCellWidget(row, 0, cb_container)
@@ -161,38 +165,55 @@ class AlarmsPage(QWidget):
 
     def _update_btn_state(self):
         """更新确认按钮启用状态"""
-        checked = self._checked_rows()
-        self.btn_ack.setEnabled(len(checked) > 0)
+        # "确认勾选"只对未确认的勾选行生效
+        unack_checked = self._checked_unack_rows()
+        self.btn_ack.setEnabled(len(unack_checked) > 0)
         # 确认全部按钮：有未确认时启用
         self.btn_ack_all.setEnabled(store.unack_count() > 0)
 
     def _checked_rows(self) -> list[int]:
-        """获取勾选的行号（仅未确认行）"""
+        """获取所有勾选的行号（含已确认行，供删除用）"""
         rows = []
         for row in range(self.table.rowCount()):
             container = self.table.cellWidget(row, 0)
             if container:
                 cb = container.findChild(QCheckBox)
-                if cb and cb.isChecked() and cb.isEnabled():
+                if cb and cb.isChecked():
+                    rows.append(row)
+        return rows
+
+    def _checked_unack_rows(self) -> list[int]:
+        """获取勾选且未确认的行号（供"确认"操作用，已确认的跳过）"""
+        rows = []
+        alarms = store.alarms
+        for row in range(self.table.rowCount()):
+            if row >= len(alarms):
+                continue
+            if alarms[row].get("acknowledged", False):
+                continue  # 已确认的跳过
+            container = self.table.cellWidget(row, 0)
+            if container:
+                cb = container.findChild(QCheckBox)
+                if cb and cb.isChecked():
                     rows.append(row)
         return rows
 
     def _on_check_all(self, state):
-        """表头全选 checkbox：切换所有未确认行"""
+        """表头全选 checkbox：切换所有行（含已确认，用于批量删除）"""
         checked = state == Qt.CheckState.Checked.value
         for row in range(self.table.rowCount()):
             container = self.table.cellWidget(row, 0)
             if container:
                 cb = container.findChild(QCheckBox)
-                if cb and cb.isEnabled():
+                if cb:
                     cb.blockSignals(True)
                     cb.setChecked(checked)
                     cb.blockSignals(False)
         self._update_btn_state()
 
     def _ack_selected(self):
-        """确认勾选的报警"""
-        rows = self._checked_rows()
+        """确认勾选的报警（仅未确认行生效）"""
+        rows = self._checked_unack_rows()
         if not rows:
             return
         alarm_ids = [store.alarms[r]["id"] for r in rows]
@@ -215,8 +236,57 @@ class AlarmsPage(QWidget):
             self._refresh_table()
             self.alarms_changed.emit()
 
+    def _delete_selected(self):
+        """删除勾选的报警行（含已确认的，所有勾选行都可删）。"""
+        rows = self._checked_rows()  # 所有勾选行（含已确认）
+        if not rows:
+            QMessageBox.information(self, "删除报警", "请先勾选要删除的报警（左侧复选框）")
+            return
+        alarms = store.alarms
+        ids = [alarms[r]["id"] for r in rows if r < len(alarms)]
+        if not ids:
+            return
+
+        reply = QMessageBox.question(
+            self, "删除报警",
+            f"确认删除勾选的 {len(ids)} 条报警？\n此操作不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # 逐条删除（store.delete_alarm 内部已 reload 内存）
+        deleted = sum(1 for aid in ids if store.delete_alarm(aid))
+        self._refresh_table()
+        self.alarms_changed.emit()
+        if deleted > 0:
+            QMessageBox.information(self, "删除完成", f"已删除 {deleted} 条报警")
+
+    @staticmethod
+    def _normalize_ts(ts: str) -> str:
+        """将时间统一为完整格式 YYYY-MM-DD HH:MM:SS.mmm。
+
+        与历史数据 CSV 的 _normalize_ts 保持一致：
+        兼容带毫秒、不带毫秒、ISO 'T' 分隔符三种输入。
+        """
+        if not ts:
+            return ""
+        s = ts.strip().replace("T", " ")
+        if "." not in s:
+            return f"{s}.000"
+        date_part, _, ms_part = s.partition(".")
+        if len(ms_part) < 3:
+            ms_part = ms_part.ljust(3, "0")
+        else:
+            ms_part = ms_part[:3]
+        return f"{date_part}.{ms_part}"
+
     def _export(self):
-        """导出报警为 CSV"""
+        """导出报警为 CSV
+
+        时间列格式与历史数据 CSV 一致：="YYYY-MM-DD HH:MM:SS.mmm"
+        （补齐 3 位毫秒 + ="..." 包装防 Excel 自动转日期类型导致毫秒丢失）。
+        """
         path, _ = QFileDialog.getSaveFileName(
             self, "导出报警", "alarms.csv", "CSV 文件 (*.csv)"
         )
@@ -228,8 +298,9 @@ class AlarmsPage(QWidget):
                 writer = csv.writer(f)
                 writer.writerow(["时间", "内容", "终端", "级别", "状态", "确认人", "确认时间"])
                 for a in store.alarms:
+                    ts = f'="{self._normalize_ts(a.get("time", ""))}"'
                     writer.writerow([
-                        a["time"], a["content"], a["terminal"], a["level"],
+                        ts, a["content"], a["terminal"], a["level"],
                         "已确认" if a.get("acknowledged") else "未确认",
                         a.get("ack_user", ""), a.get("ack_time", ""),
                     ])

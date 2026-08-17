@@ -51,6 +51,29 @@ def _get_conn() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_samples_param_time
         ON samples(device_id, param_name, timestamp)
     """)
+
+    # ===== 报警记录表（与 samples 同库，统一管理/备份）=====
+    # 全新表，旧库打开时 IF NOT EXISTS 自动建出，无需迁移
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alarms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            level TEXT NOT NULL,
+            acknowledged INTEGER NOT NULL DEFAULT 0,
+            ack_user TEXT,
+            ack_time TEXT
+        )
+    """)
+    # 时间索引（加速时间范围查询 + 排序）
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_alarms_timestamp ON alarms(timestamp)
+    """)
+    # 确认状态复合索引（加速"未确认"筛选，侧边栏未确认数常查）
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_alarms_ack ON alarms(acknowledged, timestamp)
+    """)
     conn.commit()
     return conn
 
@@ -280,6 +303,170 @@ def purge_expired(retention_days: int) -> int:
         deleted = cur.rowcount
         conn.commit()
         # 有删除才 VACUUM（VACUUM 会重写整个数据库文件，较耗时，避免无意义执行）
+        if deleted > 0:
+            conn.execute("VACUUM")
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 报警记录 CRUD（alarms 表）
+# 模式与 samples 一致：_get_conn() + try/commit/finally close + ? 参数化
+# ============================================================
+
+def insert_alarm(device_id: str, content: str, level: str, ts: Optional[str] = None) -> int:
+    """插入一条报警，返回新 id（cursor.lastrowid）。
+
+    ts 缺省用当前时间（毫秒精度，对齐 samples 时间格式）。
+    acknowledged 默认 0（未确认）。
+    """
+    if ts is None:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO alarms (timestamp, device_id, content, level, acknowledged) VALUES (?, ?, ?, ?, 0)",
+            (ts, device_id, content, level),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def query_alarms(
+    device_id: Optional[str] = None,
+    level: Optional[str] = None,
+    unacknowledged: Optional[bool] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> list[dict]:
+    """查询报警记录，按时间倒序（最新在前）。
+
+    所有参数可选，组合过滤。返回 [{id, timestamp, device_id, content, level,
+    acknowledged(bool), ack_user, ack_time}, ...]。
+    """
+    conn = _get_conn()
+    try:
+        sql = "SELECT id, timestamp, device_id, content, level, acknowledged, ack_user, ack_time FROM alarms WHERE 1=1"
+        params: list = []
+        if device_id:
+            sql += " AND device_id = ?"
+            params.append(device_id)
+        if level:
+            sql += " AND level = ?"
+            params.append(level)
+        if unacknowledged is True:
+            sql += " AND acknowledged = 0"
+        if start_time:
+            sql += " AND timestamp >= ?"
+            params.append(start_time)
+        if end_time:
+            sql += " AND timestamp <= ?"
+            params.append(end_time)
+        sql += " ORDER BY timestamp DESC"  # 最新在前（报警页默认看最新的）
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+        return [{
+            "id": r["id"],
+            "time": r["timestamp"],        # 对齐 store.alarms 的字段名（UI 用 time）
+            "device_id": r["device_id"],
+            "content": r["content"],
+            "level": r["level"],
+            "acknowledged": bool(r["acknowledged"]),
+            "ack_user": r["ack_user"] or "",
+            "ack_time": r["ack_time"] or "",
+            # 兼容字段：UI 的 COLS 用 "terminal"，历史报警曾用此名
+            "terminal": r["device_id"],
+        } for r in rows]
+    finally:
+        conn.close()
+
+
+def acknowledge_alarms(alarm_ids: list[int], user: str = "工程师") -> int:
+    """确认多条报警（UPDATE，本文件首个更新语句）。
+
+    只更新未确认的（acknowledged=0），保证幂等。
+    ack_time 用毫秒精度完整时间（对齐 samples，含日期，比旧版"H:M:S"更完整）。
+    返回实际更新条数。
+    """
+    if not alarm_ids:
+        return 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    placeholders = ",".join("?" * len(alarm_ids))
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"""UPDATE alarms
+                SET acknowledged = 1, ack_user = ?, ack_time = ?
+                WHERE id IN ({placeholders}) AND acknowledged = 0""",
+            [user, now, *alarm_ids],
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def get_unack_count(device_id: Optional[str] = None) -> int:
+    """未确认报警数（侧边栏/状态栏常查）。"""
+    conn = _get_conn()
+    try:
+        if device_id:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM alarms WHERE acknowledged = 0 AND device_id = ?",
+                (device_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM alarms WHERE acknowledged = 0"
+            ).fetchone()
+        return row[0] if row else 0
+    finally:
+        conn.close()
+
+
+def delete_alarm(alarm_id: int) -> bool:
+    """删除单条报警，返回是否删除成功。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM alarms WHERE id = ?", (alarm_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def clear_all_alarms() -> int:
+    """清空所有报警，返回删除条数。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM alarms")
+        deleted = cur.rowcount
+        conn.commit()
+        if deleted > 0:
+            conn.execute("VACUUM")
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
+def purge_expired_alarms(retention_days: int) -> int:
+    """删除超过保留天数的过期报警，返回删除条数（与 samples 保留策略一致）。"""
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM alarms WHERE timestamp < ?", (cutoff,))
+        deleted = cur.rowcount
+        conn.commit()
         if deleted > 0:
             conn.execute("VACUUM")
         conn.commit()

@@ -111,8 +111,8 @@ class Store:
         # 发送历史（持久化）
         self.send_history: list[str] = []
 
-        # 报警记录
-        self.alarms: list[dict] = [dict(a) for a in DEFAULT_ALARMS]
+        # 报警记录（持久化到 SQLite save/history.db.alarms 表，启动时加载）
+        self.alarms: list[dict] = []
 
         # 离线判定策略（持久化）
         self.policy: dict = dict(DEFAULT_POLICY)
@@ -128,6 +128,7 @@ class Store:
         self._load_history()
         self._load_policy()
         self._load_model_config()
+        self._load_alarms()  # 报警记录从 SQLite 加载
 
         # 确保 current_device_id 有效
         if self.devices and not self.current_device_id:
@@ -472,19 +473,61 @@ class Store:
 
     # ===== 报警 =====
 
+    # ===== 报警管理（SQLite 持久化）=====
+
+    def _load_alarms(self):
+        """启动时从 SQLite 加载全部报警到内存。"""
+        try:
+            from .history_db import query_alarms
+            # 全部加载（时间倒序，最新在前），内存列表与库一致
+            self.alarms = query_alarms()
+        except Exception:
+            # 库未就绪时不阻塞启动
+            self.alarms = []
+
+    def reload_alarms(self):
+        """重新从库加载报警（新增/确认/删除后调用，保持内存与库一致）。"""
+        self._load_alarms()
+
     def unack_count(self) -> int:
         """未确认报警数"""
         return sum(1 for a in self.alarms if not a.get("acknowledged"))
 
-    def acknowledge(self, alarm_ids: list[int], user: str = "工程师"):
-        """确认报警（不可逆）"""
-        from datetime import datetime
-        now = datetime.now().strftime("%H:%M:%S")
-        for a in self.alarms:
-            if a["id"] in alarm_ids and not a.get("acknowledged"):
-                a["acknowledged"] = True
-                a["ack_user"] = user
-                a["ack_time"] = now
+    def add_alarm(self, content: str, level: str, terminal: str, time_str: str = "") -> int | None:
+        """新增一条报警，返回新 id。
+
+        content/level/terminal 必填，time_str 缺省用当前时间。
+        写库后自动 reload 内存列表。
+        """
+        from .history_db import insert_alarm
+        try:
+            alarm_id = insert_alarm(terminal, content, level, time_str or None)
+            self.reload_alarms()
+            return alarm_id
+        except Exception:
+            return None
+
+    def acknowledge(self, alarm_ids: list[int], user: str = "工程师") -> int:
+        """确认报警（不可逆，写库）。返回实际确认条数。"""
+        from .history_db import acknowledge_alarms
+        try:
+            updated = acknowledge_alarms(alarm_ids, user)
+            if updated > 0:
+                self.reload_alarms()  # 同步内存
+            return updated
+        except Exception:
+            return 0
+
+    def delete_alarm(self, alarm_id: int) -> bool:
+        """删除单条报警。"""
+        from .history_db import delete_alarm
+        try:
+            ok = delete_alarm(alarm_id)
+            if ok:
+                self.reload_alarms()
+            return ok
+        except Exception:
+            return False
 
 
 # 全局单例
