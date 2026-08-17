@@ -404,6 +404,36 @@ class ModbusProtocol:
         if self._log_callback:
             self._log_callback(direction, label, content)
 
+    def _is_read_response(self, resp: list[int], reg_count: int) -> bool:
+        """校验 resp 是否为合法的 Modbus 读响应帧（功能码 03）。
+
+        正常响应格式：[slave][FC=0x03][byte_count=N][N字节数据][CRC低][CRC高]
+        其中 byte_count 应等于 reg_count × 2。
+
+        用于识别并拒绝以下非响应帧（CRC 可能巧合通过）：
+        - 回显的请求帧（串口/设备 echo）：[slave][0x03][addrH][addrL][regH][regL][CRC]
+          其第3字节是地址高位而非字节数，长度固定 8，且 byte_count ≠ reg_count×2
+        - 异常响应帧：[slave][0x83][exception][CRC]
+        - 长度不足的残帧
+        """
+        # 异常响应帧（功能码最高位为1）：不作为正常读响应，交给上层处理异常
+        if len(resp) >= 2 and (resp[1] & 0x80):
+            return False
+        # 必须至少有 slave + FC + byte_count + CRC（5字节）
+        if len(resp) < 5:
+            return False
+        # 功能码必须是 0x03（读保持寄存器）
+        if resp[1] != FC_READ_HOLDING:
+            return False
+        # 第3字节（byte_count）必须等于 reg_count × 2
+        expected_byte_count = reg_count * 2
+        if resp[2] != expected_byte_count:
+            return False
+        # 数据区长度必须够（去掉 slave/FC/byteCount/CRC2 后应 ≥ byte_count）
+        if len(resp) - 5 < expected_byte_count:
+            return False
+        return True
+
     def _transact_once(self, frame: list[int], param: dict | None, is_write: bool) -> dict:
         """单次收发。
 
@@ -478,6 +508,19 @@ class ModbusProtocol:
                     # 累加 CRC 错误统计（防御性二次校验，与通信统计保持一致）
                     if self._serial_manager:
                         self._serial_manager.crc_errors += 1
+                        self._serial_manager.tx_failures += 1
+                    if attempt < CONFIG["max_retries"]:
+                        retried += 1
+                        continue
+                    return {"ok": False, "error": last_error, "retried": retried}
+
+                # 响应格式校验：拒绝回显帧（串口echo）/异常响应/残帧
+                # CRC 通过不代表是合法响应帧（请求帧的CRC也可能巧合通过）
+                if not self._is_read_response(result["resp"], reg_count):
+                    last_error = "非响应帧（可能是回显/异常响应）"
+                    self._log("rx", "WARN", f"丢弃非响应帧：{last_error}")
+                    # 计入通信统计（异常响应算请求失败）
+                    if self._serial_manager:
                         self._serial_manager.tx_failures += 1
                     if attempt < CONFIG["max_retries"]:
                         retried += 1
@@ -572,6 +615,16 @@ class ModbusProtocol:
             if not verify_crc(resp):
                 for p in group:
                     result[p["name"]] = {"ok": False, "value": 0.0, "error": "CRC 校验失败"}
+                continue
+
+            # 响应格式校验：拒绝回显帧（串口echo）/异常响应/残帧
+            if not self._is_read_response(resp, total_regs):
+                self._log("rx", "WARN", "丢弃非响应帧（可能是回显/异常响应）")
+                # 计入通信统计（异常响应算请求失败）
+                if self._serial_manager:
+                    self._serial_manager.tx_failures += 1
+                for p in group:
+                    result[p["name"]] = {"ok": False, "value": 0.0, "error": "非响应帧"}
                 continue
 
             # 从响应数据区提取每个参数的值

@@ -73,6 +73,7 @@ class SerialManager(QObject):
         self._reader: ReadThread | None = None
         self._is_mock = False
         self._is_connected = False
+        self.last_error: str = ""  # 最近一次连接失败的错误信息（供 UI 显示）
         # 串口访问互斥锁：ReadThread 后台读 与 transact() 请求-响应 必须互斥
         # 否则 ReadThread 会抢在 transact 之前把响应帧从 buffer 里读走
         self._serial_lock = threading.Lock()
@@ -96,9 +97,14 @@ class SerialManager(QObject):
 
     def connect(self, port: str, baudrate: int = 115200, bytesize: int = 8,
                 parity: str = "N", stopbits: float = 1, timeout: float = 0.1) -> bool:
-        """打开串口。失败时回退模拟模式。"""
+        """打开串口。失败时返回 False 并记录错误信息（last_error），不回退模拟模式。
+
+        严格模式：串口被占用/不存在/参数错误时，连接失败，由调用方提示用户。
+        模拟模式仅供无设备的演示场景，不再在连接失败时静默启用，避免误导。
+        """
         # 先断开旧连接
         self.disconnect()
+        self.last_error = ""
 
         try:
             self._serial = serial.Serial(
@@ -117,13 +123,24 @@ class SerialManager(QObject):
             self._reader.data_received.connect(self._on_data_received)
             self._reader.start()
             return True
-        except Exception:
-            # 打开失败 → 模拟模式
+        except Exception as e:
+            # 严格模式：打开失败不回退模拟，记录错误原因供 UI 显示
             self._serial = None
-            self._is_mock = True
-            self._is_connected = True
-            self.connection_changed.emit(True)
-            return True
+            self._is_mock = False
+            self._is_connected = False
+            self.last_error = self._format_connect_error(port, e)
+            # 不发 connection_changed(True)，连接确实失败
+            return False
+
+    @staticmethod
+    def _format_connect_error(port: str, e: Exception) -> str:
+        """把底层异常翻译成用户友好的错误提示。"""
+        msg = str(e).lower()
+        if "access is denied" in msg or "拒绝访问" in msg or "permission" in msg:
+            return f"{port} 已被其他程序占用，请先关闭占用该串口的工具"
+        if "could not open port" in msg or "找不到" in msg or "not exist" in msg:
+            return f"{port} 不存在或无法访问，请检查串口名"
+        return f"连接 {port} 失败：{e}"
 
     def disconnect(self):
         """断开连接"""

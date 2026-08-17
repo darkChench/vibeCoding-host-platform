@@ -529,10 +529,10 @@ class MonitorPage(QWidget):
             if self._paused:
                 continue
 
-            # 追加趋势点（时间戳 + 值）
+            # 追加趋势点（时间戳 + 值）—— 仅成功时追加，异常时保持上一个有效点（曲线不更新）
             series = self._series.get(name)
-            if series:
-                v = info["value"] if info["ok"] else 0.0
+            if series and info["ok"]:
+                v = info["value"]
                 self._trend[name].append((now_ms, v))
                 # 重建 series 点：X = 毫秒时间戳，Y = 值
                 pts = [QPointF(float(ts), float(val)) for ts, val in self._trend[name]]

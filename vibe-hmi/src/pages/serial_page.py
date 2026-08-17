@@ -326,18 +326,24 @@ class SerialPage(QWidget):
         """向当前 tab 追加一行日志。
 
         direction: "tx" / "rx" / "info" / "warn"
-        label: "TX" / "RX" / "CRC" / "TIMEOUT" / 时间等
+        label: "TX" / "RX" / "CRC" / "TIMEOUT" / "WARN" 等
         content: HEX 帧 / 日志文本
+
+        分流规则：
+        - 串口原始日志(raw)：只显示真实报文 TX/RX 的 HEX 帧
+        - 诊断日志(diagnostic)：协议层事件 CRC/TIMEOUT/WARN（带时间戳）
         """
         # 存储时记录时间戳，避免重新渲染时时间漂移
         ts = _now_hms()
         line = [direction, label, content, ts]
-        self._lines["raw"].append(line)
-        # 诊断日志也记录协议层事件（带时间戳）
-        if direction in ("tx", "rx") and label in ("CRC", "TIMEOUT"):
+        # 协议诊断信息（CRC/TIMEOUT/WARN）只进诊断日志，不污染串口原始日志
+        if direction in ("tx", "rx") and label in ("CRC", "TIMEOUT", "WARN"):
             self._lines["diagnostic"].append([direction, label, f"{label}: {content}", ts])
-        if self._current_tab == "raw":
-            self._append_to_terminal(line)
+        else:
+            # 真实报文（TX/RX HEX 帧）进串口原始日志
+            self._lines["raw"].append(line)
+            if self._current_tab == "raw":
+                self._append_to_terminal(line)
         # 估算日志大小增长，超过阈值自动保存
         self._log_size += len(ts) + len(direction) + len(label) + len(content) + 8
         if self._log_size >= LOG_SIZE_THRESHOLD:

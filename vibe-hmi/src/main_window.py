@@ -8,7 +8,7 @@
 """
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout,
-    QLabel, QPushButton, QComboBox, QSizePolicy,
+    QLabel, QPushButton, QComboBox, QSizePolicy, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer
 from . import theme
@@ -54,19 +54,25 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(3000, self._purge_expired_history)
 
     def _purge_expired_history(self):
-        """按保留天数策略清理过期历史数据（启动 3 秒后执行一次）。
+        """按保留天数策略清理过期历史数据 + 报警记录（启动 3 秒后执行一次）。
 
-        从 config/policy.json 读 history_retention_days，超期的记录删除并 VACUUM 压缩。
-        retention <= 0 表示永久保留，跳过。
+        从 config/policy.json 读 history_retention_days，历史数据和报警共用同一策略，
+        超期的记录删除并 VACUUM 压缩。retention <= 0 表示永久保留，跳过。
         """
         try:
-            from .history_db import purge_expired
+            from .history_db import purge_expired, purge_expired_alarms
             days = int(store.policy.get("history_retention_days", 90))
-            deleted = purge_expired(days)
-            if deleted > 0:
+            deleted_history = purge_expired(days)
+            deleted_alarms = purge_expired_alarms(days)
+            total = deleted_history + deleted_alarms
+            if total > 0:
                 self.statusBar().showMessage(
-                    f"已自动清理 {deleted} 条过期历史数据（保留 {days} 天）", 5000
+                    f"已自动清理 {total} 条过期数据（历史{deleted_history}/报警{deleted_alarms}，保留 {days} 天）",
+                    5000,
                 )
+                # 报警有清理则同步刷新内存（侧边栏未确认数等）
+                if deleted_alarms > 0:
+                    store.reload_alarms()
         except Exception:
             # 清理失败不影响主程序运行
             pass
@@ -221,7 +227,11 @@ class MainWindow(QMainWindow):
         label.setObjectName("tool-label")
         combo = QComboBox()
         combo.addItems(items)
-        combo.setMinimumWidth(80 if len(items) <= 4 else 100)
+        # 宽度自适应内容：刷新后内容变长（如 COM3→COM65）会自动撑开
+        # AdjustToContents 让下拉框跟随最长项调整；MinimumContentsLength 保底不缩太窄
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        combo.setMinimumContentsLength(6)  # 保底容纳 "COM65" 等 5-6 字符
+        combo.setMinimumWidth(80)
 
         layout.addWidget(label)
         layout.addWidget(combo)
@@ -242,7 +252,10 @@ class MainWindow(QMainWindow):
             parity = parity_map.get(self._combo_parity["combo"].currentText(), "N")
             stop_map = {"1 bit": 1, "1.5 bit": 1.5, "2 bit": 2}
             stopbits = stop_map.get(self._combo_stop["combo"].currentText(), 1)
-            serial_manager.connect(port, baud, data_bits, parity, stopbits)
+            ok = serial_manager.connect(port, baud, data_bits, parity, stopbits)
+            if not ok:
+                # 严格模式：连接失败（串口被占用/不存在等），提示用户
+                QMessageBox.warning(self, "连接失败", serial_manager.last_error or f"无法连接 {port}")
 
     def _on_refresh_ports(self):
         """刷新串口列表"""
