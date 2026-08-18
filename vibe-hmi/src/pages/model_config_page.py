@@ -376,6 +376,10 @@ class ModelConfigPage(QWidget):
         else:
             store.add_model_config(provider, base_url, api_key, model, enabled)
 
+        # 模型配置变化后清空 AI 对话历史：
+        # 旧对话含前一个模型的自我介绍和上下文，会误导新模型（如继续自称旧模型名）
+        store.ai_messages.clear()
+
         self._refresh_table()
         self._set_edit_mode("create")
         self.config_changed.emit()
@@ -389,6 +393,8 @@ class ModelConfigPage(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             for cid in ids:
                 store.delete_model_config(cid)
+            # 模型配置变化，清空 AI 对话历史（避免旧模型上下文误导新模型）
+            store.ai_messages.clear()
             self._refresh_table()
             self._set_edit_mode("create")
             self.config_changed.emit()

@@ -186,6 +186,25 @@ def build_qss() -> str:
     QLineEdit:focus {{
         border-color: {c["PRIMARY"]};
     }}
+    /* QDateTimeEdit / QDateEdit：与 QLineEdit 同款边框圆角。
+       注意：不设 font-size/font-weight——QSS 字体会被子部件（日历弹层）继承渲染，
+       但 sizeHint 用 QWidget::font 属性（不含 QSS）计算，两者脱节会导致日历弹窗底部被裁。
+       需要字体时在代码里 setFont()，让 sizeHint 同步。 */
+    QDateTimeEdit, QDateEdit {{
+        min-height: {theme.CONTROL_H}px;
+        padding: 0 4px 0 9px;
+        border: 1px solid {c["LINE_DARK"]};
+        border-radius: {r["sm"]}px;
+        background: #ffffff;
+        color: {c["TEXT"]};
+    }}
+    QDateTimeEdit:focus, QDateEdit:focus {{
+        border-color: {c["PRIMARY"]};
+    }}
+    /* 不定制 QDateTimeEdit 的按钮/箭头 subcontrol——原生上下按钮由
+       PopupDateTimeEdit 用 NoButtons 隐藏，右侧叠加 ▾ 提示（代码实现） */
+    /* 日历弹窗（CalendarPopup）的全部样式在 history_page.py 的实例级
+       setStyleSheet 里——全局 QSS 对 Popup 顶层窗口命中不可靠，已实测。 */
     /* QComboBox：保留边框/圆角/focus，箭头用系统原生（不设 drop-down/down-arrow） */
     QComboBox {{
         min-height: {theme.CONTROL_H}px;

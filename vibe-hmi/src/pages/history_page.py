@@ -13,7 +13,11 @@ from PySide6.QtWidgets import (
     QFrame, QDateTimeEdit, QMessageBox, QFileDialog,
     QSizePolicy, QComboBox, QGridLayout,
 )
-from PySide6.QtCore import Qt, QDateTime, QEvent, QModelIndex, QAbstractItemModel, QMargins
+from PySide6.QtCore import (
+    Qt, QDateTime, QEvent, QModelIndex, QAbstractItemModel, QMargins, QDate,
+    QObject, QTimer, Signal, QPoint,
+)
+from PySide6.QtWidgets import QCalendarWidget
 from PySide6.QtGui import QColor, QPainter, QWheelEvent, QBrush
 
 from .. import theme
@@ -27,6 +31,155 @@ class NoWheelComboBox(QComboBox):
     """禁用鼠标滚轮的下拉框"""
     def wheelEvent(self, event: QWheelEvent):
         event.ignore()
+
+
+class CalendarPopup(QFrame):
+    """自管理日历弹出窗口（替代 QDateTimeEdit 内置 calendarPopup）。
+
+    内置弹窗的尺寸/边框由 Qt 私有逻辑控制（sizeHint 黑盒 + QSS 边框被
+    窗口矩形裁切，多轮修复无效）。本类完全自控：
+    - QFrame 原生 Box 边框（native 绘制，100% 可见，不依赖 QSS border）
+    - 尺寸显式设定，不依赖 sizeHint
+    - 日历用 Qt 默认样式（字体重置为 9pt 常规，避免继承父级加粗字体变形）
+    - 点选日期后发 date_selected 信号并关闭
+    """
+    date_selected = Signal(QDate)
+
+    def __init__(self, parent_edit: QDateTimeEdit):
+        super().__init__(parent_edit, Qt.WindowType.Popup)
+        # 全部样式用实例级 QSS（优先级最高、对 Popup 顶层窗口可靠渲染；
+        # 全局 QSS 对弹窗的规则命中不可靠，实测不生效）。
+        # 只设颜色/边框，不设 font-size/padding（会致渲染与 sizeHint 脱节）。
+        self.setObjectName("cal-popup-frame")
+        # 注意：不用 WA_TranslucentBackground + 圆角——Windows 上 Popup 透明
+        # 背景失效会在圆角外渲染出黑色区域（表现为黑色粗边框）
+        c = theme.HEX
+        self.setStyleSheet(f"""
+            QFrame#cal-popup-frame {{
+                border: 1px solid {c['LINE']};
+                background: #ffffff;
+            }}
+            QCalendarWidget #qt_calendar_navigationbar {{
+                background: {c['PANE_TITLE_BG']};
+            }}
+            QCalendarWidget QToolButton {{
+                color: {c['TEXT']};
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                font-weight: {theme.FW_BOLD};
+            }}
+            QCalendarWidget QToolButton:hover {{
+                background: {c['SELECT_BG']};
+                color: {c['PRIMARY']};
+            }}
+            QCalendarWidget #qt_calendar_prevmonth,
+            QCalendarWidget #qt_calendar_nextmonth {{
+                color: {c['MUTED']};
+                font-size: {theme.FS_LG}pt;
+            }}
+            QCalendarWidget QAbstractItemView {{
+                background: #ffffff;
+                alternate-background-color: {c['SIDEBAR_BG']};
+                color: {c['TEXT']};
+                selection-background-color: {c['PRIMARY']};
+                selection-color: #ffffff;
+                outline: none;
+                border: none;
+            }}
+            QCalendarWidget QAbstractItemView:enabled:hover {{
+                background: {c['SELECT_BG']};
+            }}
+            QCalendarWidget QAbstractItemView:disabled {{
+                color: {c['DISABLED_FG']};
+            }}
+        """)
+        lay = QVBoxLayout(self)
+        # 内容内缩 2px：给边框留渲染空间（贴满窗口时边框在窗口最外像素被裁）
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(0)
+
+        self.cal = QCalendarWidget()
+        self.cal.setGridVisible(False)
+        self.cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        # 10pt 加粗（早前版本的饱满观感）；setFont 会同步 sizeHint，
+        # 自管理弹窗尺寸显式设定不受影响
+        from PySide6.QtGui import QFont
+        f = QFont()
+        f.setPointSize(theme.FS_MD)
+        f.setBold(True)
+        self.cal.setFont(f)
+        # 周末红 + 今天高亮（第一版配色，与整体风格统一）
+        from PySide6.QtGui import QTextCharFormat
+        wk = QTextCharFormat()
+        wk.setForeground(QColor(theme.HEX["DANGER"]))
+        self.cal.setWeekdayTextFormat(Qt.DayOfWeek.Saturday, wk)
+        self.cal.setWeekdayTextFormat(Qt.DayOfWeek.Sunday, wk)
+        tf = QTextCharFormat()
+        tf.setFontWeight(theme.FW_BOLD)
+        tf.setForeground(QColor(theme.HEX["PRIMARY"]))
+        tf.setFontUnderline(True)
+        self.cal.setDateTextFormat(QDate.currentDate(), tf)
+        # 前后月箭头：QSS 接管 QToolButton 绘制后原生箭头会消失，
+        # 用文字字符 ‹ › 替代（TextOnly 模式确保显示文字）
+        from PySide6.QtWidgets import QToolButton
+        from PySide6.QtGui import QIcon
+        for btn_name, arrow in (("qt_calendar_prevmonth", "<"), ("qt_calendar_nextmonth", ">")):
+            btn = self.cal.findChild(QToolButton, btn_name)
+            if btn:
+                btn.setText(arrow)
+                btn.setIcon(QIcon())
+                btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                btn.setFixedSize(26, 24)  # 保证字符有足够显示空间
+        self.cal.clicked.connect(self._on_pick)
+
+        lay.addWidget(self.cal)
+        self.resize(360, 300)  # 10pt 加粗字体需要更大空间
+
+    def _on_pick(self, date: QDate):
+        self.date_selected.emit(date)
+        self.hide()
+
+
+class PopupDateTimeEdit(QDateTimeEdit):
+    """点击弹出自管理日历的日期时间框。
+
+    不用内置 setCalendarPopup（尺寸/边框黑盒），点击框体任意处弹
+    CalendarPopup 选日期。原生上下按钮隐藏，右侧叠加单个 ▾ 提示
+    （下拉框样式）；时间调节用键盘上下键。
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 隐藏原生上下箭头按钮（改为单个 ▾ 提示，下拉框风格）
+        from PySide6.QtWidgets import QAbstractSpinBox
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        # 右侧叠加 ▾（背景透明，跟随框大小定位）
+        from .. import theme as _t
+        self._arrow = QLabel("▾", self)
+        self._arrow.setStyleSheet(
+            f"color: {_t.HEX['MUTED']}; background: transparent; font-size: 10pt;"
+        )
+        self._arrow.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._arrow.setFixedWidth(20)
+        self._arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._reposition_arrow()
+
+    def _reposition_arrow(self):
+        """▾ 定位到框内右侧垂直居中"""
+        h = self.height()
+        self._arrow.setGeometry(self.width() - 26, (h - 16) // 2, 20, 16)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_arrow()
+
+    def mousePressEvent(self, event):
+        popup = CalendarPopup(self)
+        popup.cal.setSelectedDate(self.date())
+        popup.date_selected.connect(self.setDate)
+        pos = self.mapToGlobal(QPoint(0, self.height() + 4))
+        popup.move(pos)
+        popup.show()
 
 
 class CheckableComboBox(QComboBox):
@@ -263,27 +416,59 @@ class HistoryPage(QWidget):
         form.addLayout(range_row)
 
         # 自定义时间选择器（默认隐藏，点"自定义"才显示）
+        # 样式与"时间范围"行统一：标签同款（MUTED 加粗 28px 居中），日期框统一 28px 高
         self.custom_widget = QWidget()
         self.custom_widget.setVisible(False)
         custom_row = QHBoxLayout(self.custom_widget)
         custom_row.setContentsMargins(0, 0, 0, 0)
-        custom_row.setSpacing(10)
+        custom_row.setSpacing(8)
 
-        self.dt_start = QDateTimeEdit()
+        lbl_style = f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; font-weight: {theme.FW_BOLD};"
+
+        def _make_range_label(text: str) -> QLabel:
+            l = QLabel(text)
+            l.setStyleSheet(lbl_style)
+            l.setFixedHeight(36)  # 与日期框同高（36），基线对齐
+            l.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            return l
+
+        def _make_dt_edit() -> QDateTimeEdit:
+            # 用自管理弹出日历（PopupDateTimeEdit），不用内置 setCalendarPopup
+            # （其弹窗尺寸/边框由 Qt 私有逻辑控制，sizeHint 黑盒 + QSS 边框被裁）
+            d = PopupDateTimeEdit()
+            d.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            d.setFixedHeight(36)  # 给足余量：文字与边框上下各留空隙，下框线清晰可见
+            d.setMinimumWidth(175)
+            # 字体用 setFont 而非 QSS（QSS 字体会被子部件继承渲染但 sizeHint
+            # 用 QWidget::font 计算，脱节会导致尺寸计算偏差；setFont 会同步两者）
+            from PySide6.QtGui import QFont
+            f = QFont()
+            f.setPointSize(theme.FS_MD)
+            f.setBold(True)
+            d.setFont(f)
+            return d
+
+        self.dt_start = _make_dt_edit()
         self.dt_start.setDateTime(QDateTime.currentDateTime().addSecs(-3600))
-        self.dt_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.dt_start.setCalendarPopup(True)
-        self.dt_end = QDateTimeEdit()
+        self.dt_end = _make_dt_edit()
         self.dt_end.setDateTime(QDateTime.currentDateTime())
-        self.dt_end.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.dt_end.setCalendarPopup(True)
 
-        custom_row.addWidget(QLabel("从"))
+        custom_row.addWidget(_make_range_label("从"))
         custom_row.addWidget(self.dt_start)
-        custom_row.addWidget(QLabel("到"))
+        custom_row.addWidget(_make_range_label("到"))
         custom_row.addWidget(self.dt_end)
+        custom_row.addSpacing(16)
+        # 快捷提示：当前生效的自定义范围说明（辅助理解，弱化视觉）
+        hint = QLabel("查询将使用以上时间范围")
+        hint.setStyleSheet(f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_XS}pt;")
+        hint.setFixedHeight(36)  # 与日期框同高
+        hint.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        custom_row.addWidget(hint)
         custom_row.addStretch()
         form.addWidget(self.custom_widget)
+        # 自定义时间行与下方"采样点位"行的间距：给日历弹窗向下展开留余量，
+        # 避免视觉上与下排组件贴得过近
+        form.addSpacing(10)
 
         # 第二行：采样点位 + 导出格式
         fields_row = QHBoxLayout()

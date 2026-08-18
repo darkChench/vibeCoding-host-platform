@@ -32,15 +32,51 @@ class AIAssistantPage(QWidget):
         self._check_model_config()
         # 首次进入注入欢迎语
         if not store.ai_messages:
-            self._add_bubble("assistant",
-                "你好！我是 AI 运维助手。我可以帮你：\n\n"
-                "* 📊 读取传感器数据 — \"读取温度\"、\"读取全部采样参数\"\n"
-                "* 🔔 查询报警记录 — \"有哪些报警\"、\"未确认的报警\"\n"
-                "* 📈 查看趋势数据 — \"温度趋势\"\n"
-                "* 🔧 查看设备状态 — \"设备在线情况\"\n\n"
-                "也可以问我其他问题，比如 Modbus 协议、设备参数含义等。\n\n"
-                "请直接输入你的问题。"
-            )
+            self._show_welcome()
+
+    def showEvent(self, event):
+        """切到 AI 页时同步对话状态：模型切换会清空 store.ai_messages，
+        此时重置页面气泡并重新注入欢迎语（旧气泡含前模型的上下文，已失效）。"""
+        super().showEvent(event)
+        if not store.ai_messages and self._has_conversation_bubbles():
+            self._clear_bubbles()
+            self._show_welcome()
+
+    def _has_conversation_bubbles(self) -> bool:
+        """页面是否有对话气泡。气泡以 QHBoxLayout(row) 形式插入 messages_layout，
+        判断依据：存在非 stretch 的布局项。"""
+        for i in range(self.messages_layout.count()):
+            item = self.messages_layout.itemAt(i)
+            if item and item.layout() is not None:
+                return True  # row 布局（含气泡）
+        return False
+
+    def _clear_bubbles(self):
+        """清空所有对话气泡（气泡以 row 布局形式插入，删除 row 及其子 widget）。"""
+        for i in reversed(range(self.messages_layout.count())):
+            item = self.messages_layout.itemAt(i)
+            if item and item.layout() is not None:
+                row = item.layout()
+                # 删除 row 内所有 widget
+                while row.count():
+                    sub = row.takeAt(0)
+                    w = sub.widget() if sub else None
+                    if w:
+                        w.deleteLater()
+                # 从父布局移除该 row
+                self.messages_layout.removeItem(item)
+
+    def _show_welcome(self):
+        """注入欢迎语气泡。"""
+        self._add_bubble("assistant",
+            "你好！我是 AI 运维助手。我可以帮你：\n\n"
+            "* 📊 读取传感器数据 — \"读取温度\"、\"读取全部采样参数\"\n"
+            "* 🔔 查询报警记录 — \"有哪些报警\"、\"未确认的报警\"\n"
+            "* 📈 查看趋势数据 — \"温度趋势\"\n"
+            "* 🔧 查看设备状态 — \"设备在线情况\"\n\n"
+            "也可以问我其他问题，比如 Modbus 协议、设备参数含义等。\n\n"
+            "请直接输入你的问题。"
+        )
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
