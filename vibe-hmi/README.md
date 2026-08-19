@@ -23,7 +23,7 @@ python -m venv .venv
 build.bat
 ```
 
-产物：`dist/vibe-hmi/vibe-hmi.exe`（onedir 模式，约 375 MB）。
+产物：`dist/vibe-hmi/vibe-hmi.exe`（onedir 模式，约 320 MB）。
 
 把整个 `dist/vibe-hmi/` 压缩成 zip 拷给目标机，解压后双击 exe 即可运行。首次运行会在 exe 同级自动创建 `config/`（设备配置）、`save/`（历史数据库）、`history/`（串口日志）三个用户数据目录。
 

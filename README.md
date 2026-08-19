@@ -22,7 +22,7 @@ cd vibe-hmi
 build.bat
 ```
 
-产物：`vibe-hmi/dist/vibe-hmi/`（约 316 MB），双击 `vibe-hmi.exe` 即可启动。
+产物：`vibe-hmi/dist/vibe-hmi/`（约 320 MB），双击 `vibe-hmi.exe` 即可启动。
 
 **分发方式**：把整个 `dist/vibe-hmi/` 文件夹压缩成 zip，拷贝到目标电脑解压，
 双击 `vibe-hmi.exe` 运行。目标机无需安装 Python 或任何依赖。
@@ -69,7 +69,7 @@ vibe-hmi/
 ├── main.py                 # 入口
 ├── build.bat               # 一键打包脚本（PyInstaller）
 ├── vibe-hmi.spec           # PyInstaller 打包配置
-├── config/                 # 运行时配置（params/devices/policy/model_config）
+├── config/                 # 运行时配置（params/devices/policy/model_config/send_history）
 ├── save/                   # SQLite 历史数据库
 ├── src/
 │   ├── paths.py            # 路径解析（开发/打包双模式感知）

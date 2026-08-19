@@ -30,7 +30,7 @@
 
 ## 2、Golden Path（推荐执行路径）
 
-```
+```bash
 # 1. 拉取最新代码
 git pull --rebase origin main
 
@@ -121,16 +121,25 @@ git push origin main
 
 ## 6、Project Map（项目结构速览）
 
-```
+```text
 .
 ├── README.md                    # 项目主文档
 ├── AGENTS.md                    # AI Agent 行为准则（本文件）
+├── vibe-hmi/                    # 上位机产品源码（PySide6，详见 vibe-hmi/AGENTS.md）
+├── memory-bank/                 # 核心规划文档（需求/技术栈/实施计划）
+├── docs/                        # 知识库（HMI 规范/工作流/参考资料）
+├── prompts/                     # 提示词入口
+├── skills/                      # 可复用技能库
+├── tools/                       # 工具与开发配置（config/external）
+└── assets/                      # 静态资源（含 HMI HTML 原型）
 ```
 
 ### 关键入口文件
 
 - `README.md` - 项目主文档，面向人类开发者
 - `AGENTS.md` - AI Agent 操作手册（本文件）
+- `vibe-hmi/AGENTS.md` - 上位机源码目录的 Agent 操作手册
+- `memory-bank/` - 产品需求 / 技术栈 / 实施计划（功能变化须同步）
 
 ## 7、Common Pitfalls（常见坑与修复）
 
@@ -146,7 +155,7 @@ git push origin main
 
 遵循简化 Conventional Commits：
 
-```
+```text
 feat|fix|docs|chore|refactor|test: scope - summary
 ```
 

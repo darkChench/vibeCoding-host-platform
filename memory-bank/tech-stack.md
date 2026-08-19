@@ -1,7 +1,7 @@
 # 技术栈文档（memory-bank）
 
 > 本文件固化 multi-protocol-hmi 上位机的技术选型与依据。
-> 更新时间：2026-07-27。
+> 更新时间：2026-08-19。
 
 ## 1. 总体选型
 
@@ -14,8 +14,8 @@
 | 数据处理 | **requests** | LLM API 调用（OpenAI/Anthropic 兼容） |
 | 历史数据 | **SQLite（sqlite3 内置）** | Python 3 自带，无需安装，单文件持久化 |
 | 图表 | **QtCharts** | Qt 原生集成，实时曲线渲染 |
-| 打包 | **PyInstaller**（待实现） | 单 exe，离线安装 |
-| AI/LLM | **OpenAI 兼容 + Anthropic 兼容** | 支持智谱 GLM / DeepSeek / 通义 / OpenAI / Moonshot |
+| 打包 | **PyInstaller**（onedir） | 免安装目录，目标机无需 Python |
+| AI/LLM | **OpenAI 兼容 + Anthropic 兼容** | 支持智谱 GLM / DeepSeek / 通义 / OpenAI / Moonshot / MiniMax |
 
 ## 2. 为什么是 PySide6 而不是 Electron / C++ Qt
 
@@ -39,10 +39,10 @@ PySide6 应用
 │   └── 持久化到 config/*.json
 ├── 协议层（modbus_protocol.py）  ← CRC16/帧编解码/批量读取
 │   └── 30 个 pytest 验证
-├── 串口层（serial_manager.py）   ← pyserial 真实串口 + 模拟回退
-├── AI 层（ai/）                  ← LLM 客户端 + 5 工具 + 后台线程
+├── 串口层（serial_manager.py）   ← pyserial 真实串口（严格模式，失败不回退模拟）
+├── AI 层（ai/）                  ← LLM 客户端 + 6 工具 + 后台线程
 │   └── OpenAI/Anthropic 兼容
-└── 数据层（history_db.py）       ← SQLite 历史数据存储
+└── 数据层（history_db.py）       ← SQLite 历史数据 + 报警存储
 ```
 
 ## 4. 关键依赖清单
@@ -53,7 +53,7 @@ PySide6 应用
 | pyserial | 3.5 | 串口访问 |
 | requests | 2.34+ | LLM API 调用 |
 | sqlite3 | 内置 | 历史数据（Python 3 自带） |
-| pyinstaller | 6.0+ | 打包（待实现） |
+| pyinstaller | 6.0+ | 打包（build.bat，onedir 模式） |
 
 注意：**未使用 pymodbus**，协议层是自研的纯 Python 实现（更可控、可测试）。pandas/openpyxl 仅在虚拟环境中安装但实际代码未使用（CSV 导出用 csv 标准库）。
 

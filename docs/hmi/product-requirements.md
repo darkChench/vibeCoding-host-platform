@@ -10,7 +10,7 @@
 | 产品名称 | multi-protocol-hmi                                        |
 | 文档版本 | v1.0.0                                                    |
 | 编写人   | chench                                                    |
-| 更新时间 | 2026.07.27                                                |
+| 更新时间 | 2026.08.19                                                |
 | 目标版本 | v1.0.0                                                    |
 | 关联仓库 | https://github.com/darkChench/vibeCoding-host-platform    |
 | 技术栈   | PySide6 6.11 (Qt6) + Python 3.11 + pyserial + SQLite     |
@@ -29,7 +29,8 @@
 
 更麻烦的是，现场问题排查依赖经验。温度异常是传感器坏了还是管线有问题？压力波动是正常工况还是需要报警？这些问题往往需要资深工程师到场才能判断，而资深工程师不可能 7×24 小时待命。
 
-本项目试图解决这些问题：让上位机理解每台设备的参数模型，自动完成数据采集和存储，并引入 AI 运维助手——工程师用自然语言提问（"温度多少""有哪些报警""压力趋势怎么样"），AI 调用底层工具读取真实设备数据后给出回答。相当于给每台设备配了一个 24 小时在线的运维助手。
+本项目试图解决这些问题：让上位机理解每台设备的参数模型，自动完成数据采集和存储，并引入 AI 运维助手——工程师用自然语言提问
+（"温度多少""有哪些报警""压力趋势怎么样"），AI 调用底层工具读取真实设备数据后给出回答。相当于给每台设备配了一个 24 小时在线的运维助手。
 
 ### 3.2 目标
 
@@ -41,7 +42,7 @@
 
 ### 3.3 不做什么
 
-- 本版本不支持：设备控制下发（仅读取）
+- 本版本不支持：参数表通用写下发（监控/参数页仅读取）；写操作仅限网关配置页（通信地址/波特率/校验位/日期时间，功能码 06 + 国网协议帧）
 - 本项目不负责：权限管理（所有用户操作不区分角色）
 - 暂不纳入范围：Modbus TCP 协议（仅 RTU）
 
@@ -89,7 +90,7 @@
 - 批量读取：连续地址参数自动合并为一条 Modbus 请求（间隔 ≤4 寄存器），组间间隔 300ms
 - 断线重连策略：无（手动重连）
 - 通信异常提示方式：状态栏显示丢包率
-- 是否支持离线模拟器：是（串口打开失败自动回退模拟模式）
+- 连接失败策略：严格模式——串口被占用/不存在/参数错误时直接报错提示，不自动回退模拟
 - 地址格式：支持十进制（1000）和十六进制（0x03E8）
 
 ## 7. 点位与数据
@@ -127,8 +128,8 @@
 
 | 数据类型 | 存储方式 | 存储路径 | 导出格式 | 保留策略 |
 | :------- | :------- | :------- | :------- | :------- |
-| 采样数据 | SQLite | save/history.db | CSV | 不自动清理 |
-| 报警记录 | 内存 | — | CSV | 重启不丢（默认数据） |
+| 采样数据 | SQLite | save/history.db | CSV | 按天过期（默认 90 天，0=永久，设置页可配） |
+| 报警记录 | SQLite | save/history.db（alarms 表） | CSV | 重启不丢 + 随保留策略过期 + 可删除 |
 | 发送历史 | JSON | config/send_history.json | — | 最近 20 条 |
 | 串口日志 | TXT | history/*.txt | TXT | 超 10MB 自动保存 |
 | 参数配置 | JSON | config/params.json | — | 手动编辑持久化 |
@@ -148,8 +149,9 @@
 
 - 串口参数配置（串口号/波特率/数据位/校验位/停止位）
 - 连接/断开/刷新串口
-- 真实串口 + 模拟回退（无设备时自动模拟）
+- 严格连接模式：连接失败（串口被占用/不存在/参数错误）弹错误提示，不静默回退模拟
 - 控制台三 Tab：串口原始日志 / 通信统计 / 诊断日志
+- 日志分流：原始日志只收 TX/RX HEX 帧，CRC/TIMEOUT/WARN 协议事件只进诊断日志
 - HEX/ASCII 显示切换
 - 手动发送：HEX/ASCII + 行结束符 + 自动发送 + 发送历史
 - 串口日志超 10MB 自动保存 TXT
@@ -165,6 +167,8 @@
 - 单曲线时 Y 轴显示参数名称和单位
 - 时间轴显示 HH:mm:ss（或 HH:mm）
 - 后台线程轮询（QThread），UI 不卡
+- 响应格式校验：拒绝回显帧（串口 echo）/异常响应（FC|0x80）/残帧，异常计入 tx_failures
+- 读取失败/CRC 错误不追加曲线点（保持上一个有效点，避免失败值 0 导致曲线跳变）
 
 ### 8.4 参数配置 ✅
 
@@ -183,11 +187,14 @@
 - 确认状态机：单条确认/全部确认（不可逆，已确认 checkbox disabled）
 - 全选 checkbox（仅未确认行）
 - 计数联动 tag（侧边栏标签同步未确认数）
+- 删除选中（已确认行也可勾选后批量删除）
+- SQLite 持久化（save/history.db alarms 表，重启不丢）
 - CSV 导出
 
 ### 8.6 历史数据 ✅
 
 - 时间范围查询：快捷按钮（近1小时/近6小时/近24小时/近7天/自定义）
+- 自定义时间用自管理日历弹窗（PopupDateTimeEdit，替代内置 calendarPopup）
 - 点位多选下拉（CheckableComboBox）
 - 趋势曲线渲染（QtCharts）
 - CSV 导出
@@ -210,22 +217,23 @@
 - 软件信息键值表（名称/版本/平台/运行时长）
 - 维护操作键值表（保存路径/日志空间/配置文件/帧错误计数）
 - 清理日志（二次确认）
+- 历史数据保留天数配置（默认 90 天，0=永久）+ 立即清理过期数据（启动时亦自动清理）
 - 导出诊断
 
 ### 8.10 AI 运维助手 ✅
 
 - 对话 UI（用户气泡 + 助手气泡 + 工具卡片 + 思考动画）
 - 真实 LLM 调用（后台线程，支持 OpenAI 兼容 + Anthropic 兼容）
-- 5 个工具：read_sensor / read_all_sensors / get_alarms / get_trend / get_device_status
+- 6 个工具：read_sensor / read_all_sensors / get_alarms / get_trend / get_device_status / query_history
 - Markdown 渲染助手回复（表格/列表/加粗）
 - Ctrl+Enter 快捷发送
-- 对话历史保留（切页不丢）
+- 对话历史保留（切页不丢），模型配置变化后自动清空（避免旧模型上下文误导新模型）
 - 未配置模型时输入禁用 + 提示
 
 ### 8.11 模型配置 ✅
 
 - LLM 提供商 CRUD（provider/base_url/api_key/model/enabled）
-- 预设联动（OpenAI/通义/DeepSeek/智谱/Moonshot，选预设自动填 URL+model）
+- 预设联动（OpenAI/通义/DeepSeek/智谱/Moonshot/MiniMax，选预设自动填 URL+model）
 - 测试连接
 - API Key 密码模式 + 表格脱敏
 - 持久化到 model_config.json（不提交 git）
@@ -243,7 +251,7 @@
 | 报警记录 | alarms | 报警表 + 确认 + 导出 | ✅ |
 | 历史数据 | history | 查询 + 曲线 + CSV | ✅ |
 | 系统设置 | settings | 键值表 + 维护操作 | ✅ |
-| 网关配置 | gwConfig | 网关参数配置 | ✅ |
+| 网关配置 | gwConfig | 国网协议参数 + 表计通信标识读写 | ✅ |
 | 模型配置 | modelConfig | LLM 提供商 CRUD | ✅ |
 | AI 助手 | aiAssistant | 对话 + function calling | ✅ |
 
@@ -269,7 +277,7 @@
 | 可靠性   | 协议层 CRC 校验 + 超时重试 + 异常处理  |
 | 可维护性 | 协议/页面/串口/AI 四层分层清晰         |
 | 可观测性 | 串口日志 + 通信统计 + 丢包率 + 诊断日志 |
-| 可部署性 | PyInstaller 打包 exe（待实现 Ticket 10）|
+| 可部署性 | PyInstaller 打包 exe（onedir 模式，已实现）|
 
 ## 12. 质量门禁
 
@@ -278,7 +286,7 @@
 - ✅ 协议解析有测试用例（30 个 pytest）
 - ✅ 设备模拟器能跑通核心流程（模拟回包模式）
 - ✅ 断线、超时、CRC 错误帧有测试
-- ⬜ 打包后的程序能在目标机器运行（Ticket 10）
+- ✅ 打包后的程序能在目标机器运行（build.bat → dist/vibe-hmi/，免安装）
 
 推荐命令：
 
@@ -303,6 +311,7 @@ python main.py
 | A-006 | 设备管理 | 设备管理页→新增设备 | 设备列表更新 + 下拉框联动 |
 | A-007 | AI 助手 | 配置模型→输入"读取温度" | 工具卡片显示 + 助手回复数值 |
 | A-008 | 串口调试 | 串口页→HEX 发送 | 终端显示 TX/RX + 统计累加 |
+| A-009 | 打包安装 | 运行 build.bat→拷贝 dist/vibe-hmi/ 到无 Python 环境 | 双击 exe 正常启动 |
 
 ## 14. 里程碑
 
@@ -316,19 +325,19 @@ python main.py
 | M6 多设备架构 | 每设备独立参数表 + 设备管理 | store.py + device_page.py | ✅ |
 | M7 历史数据 | SQLite + 查询 + 导出 | history_db.py + history_page.py | ✅ |
 | M8 AI 助手 | LLM 对话 + function calling | ai/*.py + ai_assistant_page.py | ✅ |
-| M9 打包发布 | PyInstaller exe | 待实现 | ⬜ |
+| M9 打包发布 | PyInstaller exe | build.bat + vibe-hmi.spec（onedir） | ✅ |
 
 ## 15. 风险与待确认
 
 | 风险/问题 | 影响 | 处理方式 | 状态 |
 | :-------- | :--- | :------- | :--- |
 | 智谱 GLM web_search 需余额 | 联网搜索不可用 | 智谱充值后自动生效，暂不启用 | 已处理 |
-| 控制下发（写寄存器） | 仅读不支持写 | 后续版本增加功能码 06/10 | 待确认 |
+| 控制下发（写寄存器） | 网关参数需下发 | 功能码 06 写单寄存器 + 国网协议写帧（通信地址/波特率/校验位/日期时间），网关配置页落地 | ✅ 已实现 |
 | 多设备并发轮询 | 当前单设备切换 | 后续支持多 PollWorker | 待确认 |
 
 ## 16. 项目结构
 
-```
+```text
 vibe-hmi/
 ├── main.py                      # 入口
 ├── config/                      # 运行时配置（gitignore）
@@ -351,7 +360,8 @@ vibe-hmi/
 │   ├── sidebar.py               # 侧边栏导航
 │   ├── main_area.py             # 主区（tabs + QStackedWidget）
 │   ├── main_window.py           # 主窗口（菜单栏/工具栏/状态栏）
-│   ├── history_db.py            # SQLite 历史数据库
+│   ├── paths.py                 # 路径解析（开发/打包双模式）
+│   ├── history_db.py            # SQLite 历史数据库（采样 + 报警）
 │   ├── protocol/
 │   │   └── modbus_protocol.py   # Modbus RTU 协议层
 │   ├── serial/
@@ -360,7 +370,7 @@ vibe-hmi/
 │   │   └── poll_worker.py       # 后台轮询线程
 │   ├── ai/
 │   │   ├── llm_client.py        # LLM 客户端（OpenAI/Anthropic 兼容）
-│   │   ├── ai_tools.py          # AI 工具层（5 工具 + handler）
+│   │   ├── ai_tools.py          # AI 工具层（6 工具 + handler）
 │   │   └── llm_worker.py        # LLM 后台线程
 │   └── pages/
 │       ├── overview_page.py     # 设备总览
