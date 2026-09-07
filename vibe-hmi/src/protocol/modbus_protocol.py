@@ -10,6 +10,7 @@ Modbus RTU 协议层
 PySide6 阶段：把 simulate_read_response / transact_once 替换为
 pymodbus 的 client.read_holding_registers / write_register，接口不变。
 """
+import math
 import struct
 import random
 import time
@@ -297,6 +298,155 @@ def parse_gw_write_response(resp: list[int], request: list[int]) -> dict | None:
     }
 
 
+# 国网协议（阈值设置）读取
+# 请求帧：<slave> 66 09 01 22 06 22 07 22 08 22 09 <CRC_LO> <CRC_HI>（14 字节）
+#   - byteCount=9：1 字节前缀(0x01) + 4 个 DI（每个 2 字节）
+# 响应帧：<slave> 66 21 81 <组0> <组1> <组2> <组3> <CRC_LO> <CRC_HI>（38 字节）
+#   - byteCount=33：1 字节前缀(0x81) + 4 个数据组（每组 8 字节）
+#   - 每组布局：<DI_LO DI_HI> <fmt_LO fmt_HI> <float32_BE×4>
+#   - 26 04 表示后续 4 字节是 float32 数据
+GW_THRESHOLD_DI_ALARM     = 0x2206  # 报警节点阈值
+GW_THRESHOLD_DI_LOCK1     = 0x2207  # 闭锁1阈值
+GW_THRESHOLD_DI_LOCK2     = 0x2208  # 闭锁2阈值
+GW_THRESHOLD_DI_OVERPRESS = 0x2209  # 超压节点阈值
+
+# 4 个阈值 DI（顺序固定，DI 高字节在前便于构造帧）
+GW_THRESHOLD_DIS = [
+    GW_THRESHOLD_DI_ALARM,
+    GW_THRESHOLD_DI_LOCK1,
+    GW_THRESHOLD_DI_LOCK2,
+    GW_THRESHOLD_DI_OVERPRESS,
+]
+
+
+def build_gw_threshold_read_frame(slave_id: int) -> list[int]:
+    """生成国网协议「读取阈值」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 09 01 22 06 22 07 22 08 22 09 <CRC_LO> <CRC_HI>
+    长度固定 14 字节；byteCount=9（1 字节前缀 + 4 个 2 字节 DI）。
+
+    例：slave=2 → [02, 66, 09, 01, 22, 06, 22, 07,
+                   22, 08, 22, 09, A5, 6C]
+    """
+    payload = [0x01]  # 读请求前缀
+    for di in GW_THRESHOLD_DIS:
+        payload.append((di >> 8) & 0xFF)  # DI 高字节
+        payload.append(di & 0xFF)         # DI 低字节
+    byte_count = len(payload) & 0xFF
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def build_gw_threshold_write_frame(slave_id: int, di: int,
+                                   data_bytes: list[int]) -> list[int]:
+    """生成国网协议「写入单个阈值」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 09 02 <DI_HI> <DI_LO> 26 04 <data×4> <CRC_LO> <CRC_HI>
+    长度固定 17 字节；byteCount=9（1 字节前缀 + 2 字节 DI + 2 字节 fmt + 4 字节数据）。
+
+    参数：
+        slave_id: 从机地址（1~247）
+        di: DI 标识（0x2206=报警 / 0x2207=闭锁1 / 0x2208=闭锁2 / 0x2209=超压）
+        data_bytes: 4 字节数据（float32 小端，或全 FFFFFFFF 表示无效/未配置）
+
+    例：slave=1, di=0x2206, data=[0x9A,0x99,0x19,0x3F]（0.6 的 float32 LE）→
+        01 66 09 02 22 06 26 04 9A 99 19 3F 16 77
+    """
+    if not (1 <= slave_id <= 247):
+        raise ValueError(f"从机地址必须 1~247，得到 {slave_id}")
+    if len(data_bytes) != 4:
+        raise ValueError(f"数据必须为 4 字节，得到 {len(data_bytes)} 字节")
+    payload = [
+        0x02,                       # 写命令前缀
+        (di >> 8) & 0xFF,          # DI 高字节
+        di & 0xFF,                 # DI 低字节
+        0x26, 0x04,                # 格式标识（4 字节 float32）
+    ] + list(data_bytes)
+    byte_count = len(payload) & 0xFF  # = 0x09
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def parse_gw_threshold_write_response(resp: list[int], request: list[int]) -> dict | None:
+    """解析国网协议「阈值写入」响应。
+
+    响应按"回显请求"约定：设备收到合法写命令后原样回传，
+    上层按 CRC + byteCount 判定成功与否。
+
+    返回：
+        ok: True 表示回包 CRC 通过且 FC 正确
+        echo: 回包原始字节列表
+    失败返回 None。
+    """
+    # 最少：slave(1) + FC(1) + byteCount(1) + data + CRC(2) = 至少 5 字节
+    if len(resp) < 5:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+    return {
+        "ok": True,
+        "echo": resp,
+    }
+
+
+def parse_gw_threshold_read_response(resp: list[int]) -> dict | None:
+    """解析国网协议「读取阈值」响应。
+
+    响应结构（38 字节）：
+        [0]      slave
+        [1]      FC (0x66)
+        [2]      byte count (0x21 = 33)
+        [3]      prefix (0x81)
+        [4..35]  数据区（32 字节 = 4 组 × 8 字节），每组：
+                  [DI_LO DI_HI fmt_LO fmt_HI float32_LE×4]
+        [36..37] CRC（LE 2 字节）
+
+    数据为 IEEE754 float32 小端（低字节在前）：
+        例：字节序列 "14 AE 07 3F" → 0x3F07AE14 → 0.7800
+
+    设备用全 0xFF（4 字节 = NaN）表示该阈值"无效/未配置"，解析时直接跳过，
+    返回字典中不会出现该 DI，由 UI 显示 `------`。
+
+    返回 {DI: float_value} 字典（仅含有效数值的 DI）；
+    CRC / FC / 长度校验失败返回 None。
+    """
+    # 最少需要：1(slave) + 1(FC) + 1(byteCount) + 1(prefix) + 8*4 + 2(CRC) = 38
+    if len(resp) < 4 + 8 * 4 + 2:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    # 数据区：去掉 slave/FC/byteCount/prefix 头和 CRC 尾
+    payload = resp[4:-2]
+    if len(payload) < 8 * 4:
+        return None
+
+    values: dict[int, float] = {}
+    # 每组 8 字节：DI(2) + fmt(2) + float32 LE(4)
+    for i in range(len(payload) // 8):
+        offset = i * 8
+        di = (payload[offset] << 8) | payload[offset + 1]
+        # fmt = (payload[offset+2] << 8) | payload[offset+3]  # 协议固定 26 04，暂未使用
+        data = payload[offset + 4:offset + 8]
+        # 全 0xFF = NaN（设备"无效/未配置"标记），跳过不入字典
+        if data == [0xFF, 0xFF, 0xFF, 0xFF]:
+            continue
+        try:
+            value = struct.unpack("<f", bytes(data))[0]
+        except Exception:
+            continue
+        # 防御性：struct.unpack 也可能给出 NaN（异常位模式），同样视为无效
+        if math.isnan(value) or math.isinf(value):
+            continue
+        values[di] = value
+
+    return values
+
+
 def float32_to_bytes(value: float) -> list[int]:
     """float32 → 4 字节（IEEE754 Big-Endian，高字在前）"""
     return list(struct.pack(">f", value))
@@ -305,6 +455,16 @@ def float32_to_bytes(value: float) -> list[int]:
 def bytes_to_float32(data: list[int]) -> float:
     """4 字节 → float32（IEEE754 Big-Endian）"""
     return struct.unpack(">f", bytes(data))[0]
+
+
+def float32_to_bytes_le(value: float) -> list[int]:
+    """float32 → 4 字节（IEEE754 Little-Endian，低字节在前）"""
+    return list(struct.pack("<f", value))
+
+
+def bytes_to_float32_le(data: list[int]) -> float:
+    """4 字节 → float32（IEEE754 Little-Endian，低字节在前）"""
+    return struct.unpack("<f", bytes(data))[0]
 
 
 def simulate_read_response(frame: list[int], param: dict) -> dict:

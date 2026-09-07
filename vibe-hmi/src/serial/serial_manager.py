@@ -279,7 +279,8 @@ class SerialManager(QObject):
             resp = [slave_id, fc, byte_count] + data_bytes
         elif fc == GW_FC:
             # 国网协议：第 3 字节（byteCount）是读写路由的依据
-            #   byteCount == 0x03 → 读请求（payload = 01 20 00）
+            #   byteCount == 0x03 → 读表计通信标识（payload = 01 20 00）
+            #   byteCount == 0x09 → 读阈值（payload = 01 + 4×DI，2 字节/DI）
             #   byteCount == 0x06 → 单字节写（payload = 5 头 + 1 数据）
             #   byteCount == 0x0C → 日期时间写（payload = 5 头 + 7 数据）
             byte_count = req[2] if len(req) > 2 else 0
@@ -299,6 +300,31 @@ class SerialManager(QObject):
                     now.tm_hour, now.tm_min, now.tm_sec,
                 ]
                 resp = [slave_id, fc, len(header) + len(payload)] + header + payload
+            elif byte_count == 0x09:
+                # 阈值读取响应（38 字节）：
+                #   <slave> 66 21 81 [DI×2 fmt×2 float32_LE×4]×4 <CRC×2>
+                # 模拟：4 组阈值用 4 个不同演示值
+                from ..protocol.modbus_protocol import (
+                    GW_THRESHOLD_DI_ALARM, GW_THRESHOLD_DI_LOCK1,
+                    GW_THRESHOLD_DI_LOCK2, GW_THRESHOLD_DI_OVERPRESS,
+                    float32_to_bytes_le,
+                )
+                mock_values = {
+                    GW_THRESHOLD_DI_ALARM:     0.45,  # 报警节点阈值
+                    GW_THRESHOLD_DI_LOCK1:     0.35,  # 闭锁1阈值
+                    GW_THRESHOLD_DI_LOCK2:     0.30,  # 闭锁2阈值
+                    GW_THRESHOLD_DI_OVERPRESS: 0.55,  # 超压节点阈值
+                }
+                groups = []
+                for di in (GW_THRESHOLD_DI_ALARM, GW_THRESHOLD_DI_LOCK1,
+                           GW_THRESHOLD_DI_LOCK2, GW_THRESHOLD_DI_OVERPRESS):
+                    di_bytes = [(di >> 8) & 0xFF, di & 0xFF]
+                    fmt_bytes = [0x26, 0x04]  # 协议固定：4 字节 float32
+                    data_bytes = float32_to_bytes_le(mock_values[di])
+                    groups.extend(di_bytes + fmt_bytes + data_bytes)
+                prefix = [0x81]
+                payload = prefix + groups
+                resp = [slave_id, fc, len(payload)] + payload
             else:
                 # 国网协议写命令：按"回显请求"约定返回。
                 # 请求已包含 CRC → 直接回传，不再追加 CRC。

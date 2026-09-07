@@ -8,6 +8,7 @@ body 内 4 个参数：通信地址 / 波特率 / 奇偶校验位 / 日期时间
 读取：从串口/模拟读参数 → 回填表单。
 写入：把表单值打包下发。
 """
+import struct
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
@@ -24,6 +25,10 @@ from ..protocol.modbus_protocol import (
     build_gw_write_baud_frame, build_gw_write_parity_frame,
     build_gw_write_datetime_frame, build_gw_write_addr_frame,
     parse_gw_write_response,
+    build_gw_threshold_read_frame, parse_gw_threshold_read_response,
+    build_gw_threshold_write_frame, parse_gw_threshold_write_response,
+    GW_THRESHOLD_DI_ALARM, GW_THRESHOLD_DI_LOCK1,
+    GW_THRESHOLD_DI_LOCK2, GW_THRESHOLD_DI_OVERPRESS,
 )
 
 
@@ -529,6 +534,12 @@ class GwConfigPage(QWidget):
 
         head_layout.addSpacing(12)
 
+        self.btn_sensor_read = QPushButton("读取")
+        self.btn_sensor_read.setProperty("variant", "secondary")
+        self.btn_sensor_read.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_sensor_read.clicked.connect(self._on_read_sensor_status)
+        head_layout.addWidget(self.btn_sensor_read, alignment=Qt.AlignmentFlag.AlignVCenter)
+
         self.btn_auto_sensor = QPushButton("自动采集")
         self.btn_auto_sensor.setProperty("variant", "secondary")
         self.btn_auto_sensor.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -607,7 +618,7 @@ class GwConfigPage(QWidget):
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(10, 0, 10, 0)
 
-        title = QLabel("实时数据")
+        title = QLabel("温度压力密度数据")
         title.setObjectName("card-title")
         head_layout.addWidget(title)
         head_layout.addStretch()
@@ -617,6 +628,12 @@ class GwConfigPage(QWidget):
         head_layout.addWidget(self.realtime_state_tag, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         head_layout.addSpacing(12)
+
+        self.btn_realtime_read = QPushButton("读取")
+        self.btn_realtime_read.setProperty("variant", "secondary")
+        self.btn_realtime_read.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_realtime_read.clicked.connect(self._on_read_realtime_data)
+        head_layout.addWidget(self.btn_realtime_read, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_auto_realtime = QPushButton("自动采集")
         self.btn_auto_realtime.setProperty("variant", "secondary")
@@ -1230,7 +1247,17 @@ class GwConfigPage(QWidget):
             f"\n报文流水：\n" + "\n".join(step_lines)
         )
 
-    # ===== 第三卡：传感器状态 自动采集 =====
+    # ===== 第三卡：传感器状态 读取 / 自动采集 =====
+
+    def _on_read_sensor_status(self):
+        """手动读取一次传感器状态"""
+        if not serial_manager.is_connected:
+            QMessageBox.warning(
+                self, "读取失败",
+                "串口未连接，无法读取传感器状态。"
+            )
+            return
+        self._on_sensor_tick()
 
     def _toggle_auto_sensor(self):
         """切换自动采集开关"""
@@ -1283,7 +1310,17 @@ class GwConfigPage(QWidget):
         for box in self._sensor_boxes:
             box.set_state("warn" if random.random() < 0.15 else "ok")
 
-    # ===== 第四卡：实时数据 自动采集 =====
+    # ===== 第四卡：温度压力密度数据 读取 / 自动采集 =====
+
+    def _on_read_realtime_data(self):
+        """手动读取一次实时数据"""
+        if not serial_manager.is_connected:
+            QMessageBox.warning(
+                self, "读取失败",
+                "串口未连接，无法读取实时数据。"
+            )
+            return
+        self._on_realtime_tick()
 
     def _toggle_auto_realtime(self):
         """切换实时数据自动采集开关"""
@@ -1340,86 +1377,313 @@ class GwConfigPage(QWidget):
         self._set_threshold_synced(False)
 
     def _on_read_thresholds(self):
-        """从设备读取阈值 → 回填表单（演示用模拟值）"""
+        """从设备读取阈值 → 回填表单
+
+        协议（FC=0x66，非标准 Modbus）：
+          请求：<slave> 66 09 01 22 06 22 07 22 08 22 09 <CRC_LO CRC_HI>（14 字节）
+          响应：<slave> 66 21 81 <组0> <组1> <组2> <组3> <CRC_LO CRC_HI>（38 字节）
+                每组 8 字节：<DI_LO DI_HI fmt_LO fmt_HI float32_BE×4>
+                4 组 DI 顺序固定：22 06=报警 / 22 07=闭锁1 / 22 08=闭锁2 / 22 09=超压
+                数据按 float32 大端解析，保留 4 位小数。
+        """
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "读取失败",
                 "串口未连接，无法读取阈值。\n（演示模式将直接使用默认值）"
             )
             return
+
+        # modbus 从机地址取自顶卡「表计通讯地址」
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            QMessageBox.warning(
+                self, "读取失败",
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数"
+            )
+            return
+
+        # 构建请求帧
+        request = build_gw_threshold_read_frame(slave)
+        hex_req = " ".join(f"{b:02X}" for b in request)
+
         try:
+            # 真实模式由 serial_manager 走串口；模拟模式也会生成响应帧
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                QMessageBox.warning(
+                    self, "读取失败",
+                    "设备无响应（超时），请检查串口连接和从机地址。"
+                )
+                return
+
+            parsed = parse_gw_threshold_read_response(list(resp_bytes))
+            if parsed is None:
+                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+                QMessageBox.warning(
+                    self, "读取失败",
+                    f"响应帧解析失败：\n{hex_resp}\n\n"
+                    f"（期望：FC=0x{GW_FC:02X} + 38 字节 + CRC 通过）"
+                )
+                return
+
+            # DI → 表单字段的映射
+            di_to_field = {
+                GW_THRESHOLD_DI_ALARM:     "alarm",
+                GW_THRESHOLD_DI_LOCK1:     "lock1",
+                GW_THRESHOLD_DI_LOCK2:     "lock2",
+                GW_THRESHOLD_DI_OVERPRESS: "overpress",
+            }
+
             # 屏蔽信号，避免程序填充触发"未保存"
             edits = list(self._thr_fields.values())
             for e in edits:
                 e.blockSignals(True)
-            self._thr_fields["alarm"].setText("0.45")
-            self._thr_fields["lock1"].setText("0.35")
-            self._thr_fields["lock2"].setText("0.30")
-            self._thr_fields["overpress"].setText("0.55")
-            for e in edits:
-                e.blockSignals(False)
+            try:
+                filled: list[tuple[str, float]] = []
+                missing: list[int] = []
+                for di, field in di_to_field.items():
+                    if di in parsed:
+                        value = float(parsed[di])
+                        self._thr_fields[field].setText(f"{value:.4f}")
+                        filled.append((field, value))
+                    else:
+                        # 设备返回全 0xFF（NaN 标记）表示该阈值"未配置/无效"
+                        # → 输入框显示占位符 `------`，便于用户识别
+                        self._thr_fields[field].setText("------")
+                        missing.append(di)
+            finally:
+                for e in edits:
+                    e.blockSignals(False)
+
             self._set_threshold_synced(True)
-            QMessageBox.information(self, "读取成功", "已从设备读取阈值参数")
+
+            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+            field_labels = {
+                "alarm":    "报警节点阈值",
+                "lock1":    "闭锁1阈值",
+                "lock2":    "闭锁2阈值",
+                "overpress": "超压节点阈值",
+            }
+            filled_lines = "\n".join(
+                f"  {field_labels[f]}：{v:.4f}" for f, v in filled
+            ) or "  （无）"
+            missing_note = (
+                f"\n\n未返回/无效的 DI（显示为 ------）："
+                f"{[f'0x{di:04X}' for di in missing]}"
+                if missing else ""
+            )
+            QMessageBox.information(
+                self, "读取成功",
+                f"已从设备（从机地址 {slave}）读取阈值参数\n\n"
+                f"请求：{hex_req}\n"
+                f"响应：{hex_resp}\n\n"
+                f"解析结果：\n{filled_lines}{missing_note}"
+            )
         except Exception as e:
             QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
 
+    # 阈值写入步骤顺序：报警节点 → 闭锁1 → 闭锁2 → 超压节点
+    # 每步等待设备回包后再发下一步，全部成功提示"写入成功"，任一失败提示"写入失败"
+    _THR_WRITE_STEPS = ("alarm", "lock1", "lock2", "overpress")
+    _THR_STEP_LABELS = {
+        "alarm":     "报警节点阈值",
+        "lock1":     "闭锁1阈值",
+        "lock2":     "闭锁2阈值",
+        "overpress": "超压节点阈值",
+    }
+    _THR_STEP_DIS = {
+        "alarm":     GW_THRESHOLD_DI_ALARM,     # 0x2206
+        "lock1":     GW_THRESHOLD_DI_LOCK1,     # 0x2207
+        "lock2":     GW_THRESHOLD_DI_LOCK2,     # 0x2208
+        "overpress": GW_THRESHOLD_DI_OVERPRESS, # 0x2209
+    }
+
     def _on_write_thresholds(self):
-        """把表单值写入设备"""
-        # 收集 + 校验
+        """把 4 个阈值分步写入设备
+
+        协议（FC=0x66，非标准 Modbus）：每步发一条写帧，等回包再发下一步。
+          报警节点：<slave> 66 09 02 22 06 26 04 <float32_BE> <CRC>
+          闭锁1：  <slave> 66 09 02 22 07 26 04 <float32_BE> <CRC>
+          闭锁2：  <slave> 66 09 02 22 08 26 04 <float32_BE> <CRC>
+          超压节点：<slave> 66 09 02 22 09 26 04 <float32_BE> <CRC>
+
+        如果某阈值显示为 "------"（读取时设备返回全 0xFF 表示无效/未配置），
+        则写入 FFFFFFFF（4 字节全 FF），保持设备原无效标记。
+        """
+        # 1) 从机地址：顶卡「表计通讯地址」= 设备当前地址
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            QMessageBox.warning(
+                self, "写入失败",
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数\n"
+                "（该值是发送 modbus 帧时使用的从机地址，需与设备当前地址一致）"
+            )
+            return
+
+        # 2) 收集 + 校验各阈值
         values: dict[str, str] = {}
         for name, edit in self._thr_fields.items():
             text = edit.text().strip()
             if not text:
                 QMessageBox.warning(
                     self, "写入失败",
-                    f"阈值不能为空：{THRESHOLD_FIELDS[[n for n, _ in THRESHOLD_FIELDS].index(name)][1]}"
+                    f"阈值不能为空：{self._THR_STEP_LABELS[name]}"
                 )
                 return
+            # "------" 是读取时设备返回全 0xFF 的占位符，写入时直接发 FFFFFFFF
+            if text == "------":
+                values[name] = "------"
+                continue
             try:
                 float(text)  # 校验为合法数字
             except ValueError:
                 QMessageBox.warning(
                     self, "写入失败",
-                    f"阈值必须为数字：{text}"
+                    f"阈值必须为数字或 ------：{text}"
                 )
                 return
             values[name] = text
 
+        # 3) 串口未连接：演示模式，仅展示待写入值
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "写入失败",
                 "串口未连接，无法写入阈值。\n（演示模式将只显示待写入的值）"
             )
+            display = {
+                k: ("FFFFFFFF（无效/未配置）" if v == "------" else v)
+                for k, v in values.items()
+            }
             QMessageBox.information(
                 self, "待写入阈值（演示）",
-                f"报警节点阈值：{values['alarm']}\n"
-                f"闭锁1阈值：{values['lock1']}\n"
-                f"闭锁2阈值：{values['lock2']}\n"
-                f"超压节点阈值：{values['overpress']}"
+                f"报警节点阈值：{display['alarm']}\n"
+                f"闭锁1阈值：{display['lock1']}\n"
+                f"闭锁2阈值：{display['lock2']}\n"
+                f"超压节点阈值：{display['overpress']}"
             )
             return
 
-        try:
-            self.btn_thr_write.setText("写入中...")
-            self.btn_thr_write.setEnabled(False)
-            QTimer.singleShot(600, lambda: self._write_thresholds_done(values))
-        except Exception as e:
-            self.btn_thr_write.setText("写入")
-            self.btn_thr_write.setEnabled(True)
-            QMessageBox.warning(self, "写入失败", f"写入异常：{e}")
+        # 4) 初始化分步写入状态机
+        self._thr_write_slave = slave
+        self._thr_write_values = values
+        self._thr_write_step_index = 0
+        self._thr_write_results: list[dict] = []
+        self._thr_write_busy = True
 
-    def _write_thresholds_done(self, values: dict[str, str]):
-        """阈值写入完成回调"""
+        self.btn_thr_write.setText("写入中...")
+        self.btn_thr_write.setEnabled(False)
+        self._do_threshold_write_step()
+
+    def _do_threshold_write_step(self):
+        """执行当前阈值写入步骤：发帧 → 等回包 → 下一步，全部成功后 _threshold_write_all_done。"""
+        if not self._thr_write_busy:
+            return
+        idx = self._thr_write_step_index
+        if idx >= len(self._THR_WRITE_STEPS):
+            self._threshold_write_all_done()
+            return
+        step = self._THR_WRITE_STEPS[idx]
+        di = self._THR_STEP_DIS[step]
+        raw = self._thr_write_values[step]
+
+        # 构造 4 字节数据："------" → FFFFFFFF；否则 float32 小端（与读取响应一致）
+        if raw == "------":
+            data_bytes = [0xFF, 0xFF, 0xFF, 0xFF]
+        else:
+            data_bytes = list(struct.pack("<f", float(raw)))
+
+        try:
+            frame = build_gw_threshold_write_frame(self._thr_write_slave, di, data_bytes)
+        except ValueError as e:
+            self._threshold_write_abort(f"参数非法：{e}", step, None, None)
+            return
+
+        # 发送并等待响应
+        try:
+            resp_bytes = serial_manager.transact(bytes(frame))
+        except Exception as e:
+            self._threshold_write_abort(f"串口异常：{e}", step, frame, None)
+            return
+
+        if not resp_bytes:
+            self._threshold_write_abort("设备无响应（超时）", step, frame, None)
+            return
+
+        resp = list(resp_bytes)
+        parsed = parse_gw_threshold_write_response(resp, frame)
+        if parsed is None:
+            hex_resp = " ".join(f"{b:02X}" for b in resp)
+            self._threshold_write_abort(
+                f"回包校验失败（FC/CRC 不通过）：\n{hex_resp}",
+                step, frame, resp,
+            )
+            return
+
+        # 该步成功，记录回执
+        self._thr_write_results.append({
+            "step": step,
+            "label": self._THR_STEP_LABELS[step],
+            "frame": frame,
+            "resp": resp,
+        })
+
+        # 下一步（让 UI 有机会刷新）
+        self._thr_write_step_index += 1
+        QTimer.singleShot(50, self._do_threshold_write_step)
+
+    def _threshold_write_abort(self, reason: str, step: str,
+                               frame: list[int] | None, resp: list[int] | None):
+        """某一步阈值写入失败：终止状态机，恢复按钮，弹错误框"""
+        self._thr_write_busy = False
+        self.btn_thr_write.setText("写入")
+        self.btn_thr_write.setEnabled(True)
+        self._set_threshold_synced(False)
+
+        lines = [
+            f"第 {self._thr_write_step_index + 1} 步"
+            f"「{self._THR_STEP_LABELS[step]}」失败：{reason}"
+        ]
+        if frame is not None:
+            lines.append("请求：" + " ".join(f"{b:02X}" for b in frame))
+        if resp is not None:
+            lines.append("回包：" + " ".join(f"{b:02X}" for b in resp))
+        lines.append(
+            f"已完成 {len(self._thr_write_results)} / {len(self._THR_WRITE_STEPS)} 步，"
+            f"后续步骤未执行。"
+        )
+        QMessageBox.warning(self, "写入失败", "\n".join(lines))
+
+    def _threshold_write_all_done(self):
+        """4 步阈值全部写入成功：恢复按钮、更新状态、汇总展示"""
+        self._thr_write_busy = False
         self.btn_thr_write.setText("写入")
         self.btn_thr_write.setEnabled(True)
         self._set_threshold_synced(True)
+
+        # 汇总 4 步的请求/响应（便于现场排错）
+        step_lines = []
+        for r in self._thr_write_results:
+            req_hex = " ".join(f"{b:02X}" for b in r["frame"])
+            resp_hex = " ".join(f"{b:02X}" for b in r["resp"])
+            step_lines.append(f"  [{r['label']}]")
+            step_lines.append(f"    请求：{req_hex}")
+            step_lines.append(f"    响应：{resp_hex}")
+
+        values = self._thr_write_values
+        display_lines = []
+        for step in self._THR_WRITE_STEPS:
+            raw = values[step]
+            if raw == "------":
+                display_lines.append(f"  {self._THR_STEP_LABELS[step]}：FFFFFFFF（无效/未配置）")
+            else:
+                display_lines.append(f"  {self._THR_STEP_LABELS[step]}：{raw}")
+
         QMessageBox.information(
             self, "写入成功",
-            f"阈值参数已写入设备：\n"
-            f"  报警节点阈值：{values['alarm']}\n"
-            f"  闭锁1阈值：{values['lock1']}\n"
-            f"  闭锁2阈值：{values['lock2']}\n"
-            f"  超压节点阈值：{values['overpress']}"
+            f"阈值参数已分 {len(self._THR_WRITE_STEPS)} 步写入设备"
+            f"（从机地址 {self._thr_write_slave}）：\n"
+            + "\n".join(display_lines)
+            + f"\n\n报文流水：\n" + "\n".join(step_lines)
         )
 
     # ===== 生命周期 =====
