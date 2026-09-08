@@ -29,6 +29,11 @@ from ..protocol.modbus_protocol import (
     build_gw_threshold_write_frame, parse_gw_threshold_write_response,
     GW_THRESHOLD_DI_ALARM, GW_THRESHOLD_DI_LOCK1,
     GW_THRESHOLD_DI_LOCK2, GW_THRESHOLD_DI_OVERPRESS,
+    build_gw_realtime_read_frame, parse_gw_realtime_read_response,
+    GW_REALTIME_DI_DENSITY, GW_REALTIME_DI_TEMP,
+    GW_REALTIME_DI_PRESSURE, GW_REALTIME_DI_WATER,
+    build_gw_sensor_status_read_frame, parse_gw_sensor_status_response,
+    build_gw_dev_info_read_frame, parse_gw_dev_info_response,
 )
 
 
@@ -148,9 +153,9 @@ SENSOR_STATUS_NAMES = [
 
 # 4 个实时数据项：name → (显示名, 单位, 小数位数)
 REALTIME_METRICS = [
-    ("density",  "密度值",   "kg/m³", 3),
-    ("temp",     "温度值",   "℃",    1),
-    ("pressure", "相对压力", "MPa",  3),
+    ("density",  "密度值",   "kg/m³", 4),
+    ("temp",     "温度值",   "℃",    2),
+    ("pressure", "相对压力", "MPa",  4),
     ("water",    "微水",     "ppm",  2),
 ]
 
@@ -826,21 +831,82 @@ class GwConfigPage(QWidget):
         self.f_serial.blockSignals(False)
 
     def _on_read_device(self):
-        """从设备读取基本信息标识 → 回填表单"""
+        """从设备读取基本信息标识 → 回填表单
+
+        协议（FC=0x66，非标准 Modbus）：
+          请求：<slave> 66 07 01 21 01 21 02 21 03 <CRC_LO CRC_HI>（12 字节）
+          响应：<slave> 66 24 81 <TLV×3> <CRC_LO CRC_HI>
+                TLV 格式：<type=0x21> <id> <length> <data×length>
+                  21 01：设备型号（ASCII，16 字节）
+                  21 02：表计 ID（H）（6 字节 hex）
+                  21 03：传感器类型标识（1 字节）
+        """
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "读取失败",
-                "串口未连接，无法读取设备基本信息。\n（演示模式将直接使用默认值）"
+                "串口未连接，无法读取设备基本信息。"
             )
             return
-        try:
-            # TODO: 真实协议解析后回填。下面用模拟值演示流程
-            self._set_device_fields(
-                model="DTZ188", vendor="0001",
-                ver_label="a", ver_num="01", serial=SERIAL_DEFAULT,
+
+        # modbus 从机地址取自顶卡「表计通讯地址」
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            QMessageBox.warning(
+                self, "读取失败",
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数"
             )
+            return
+
+        # 构建请求帧：<slave> 66 07 01 21 01 21 02 21 03 <CRC>
+        request = build_gw_dev_info_read_frame(slave)
+        hex_req = " ".join(f"{b:02X}" for b in request)
+
+        try:
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                QMessageBox.warning(
+                    self, "读取失败",
+                    "设备无响应（超时），请检查串口连接和从机地址。"
+                )
+                return
+
+            parsed = parse_gw_dev_info_response(list(resp_bytes))
+            if parsed is None:
+                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+                QMessageBox.warning(
+                    self, "读取失败",
+                    f"响应帧解析失败：\n{hex_resp}\n\n"
+                    f"（期望：FC=0x{GW_FC:02X} + TLV 数据 + CRC 通过）"
+                )
+                return
+
+            # 回填表单
+            self.f_model.blockSignals(True)
+            self.f_meter_id_h.blockSignals(True)
+            self.f_sensor_type.blockSignals(True)
+            try:
+                self.f_model.setText(parsed["model"])
+                self.f_meter_id_h.setText(parsed["meter_id_h"])
+                self.f_sensor_type.setText(parsed["sensor_type"])
+            finally:
+                self.f_model.blockSignals(False)
+                self.f_meter_id_h.blockSignals(False)
+                self.f_sensor_type.blockSignals(False)
+
             self._set_device_synced(True)
-            QMessageBox.information(self, "读取成功", "已从设备读取基本信息标识")
+
+            # 汇总弹窗
+            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+            QMessageBox.information(
+                self, "读取成功",
+                f"已从设备（从机地址 {slave}）读取设备基本信息标识\n\n"
+                f"请求：{hex_req}\n"
+                f"响应：{hex_resp}\n\n"
+                f"解析结果：\n"
+                f"  设备型号：{parsed['model']}\n"
+                f"  表计 ID（H）：{parsed['meter_id_h']}\n"
+                f"  传感器类型：{parsed['sensor_type']}"
+            )
         except Exception as e:
             QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
 
@@ -1250,14 +1316,104 @@ class GwConfigPage(QWidget):
     # ===== 第三卡：传感器状态 读取 / 自动采集 =====
 
     def _on_read_sensor_status(self):
-        """手动读取一次传感器状态"""
+        """手动读取一次传感器状态（含详细回执弹窗）
+
+        协议（FC=0x66，非标准 Modbus）：
+          请求：<slave> 66 03 01 22 01 <CRC_LO CRC_HI>（8 字节）
+          响应：<slave> 66 07 81 22 01 04 02 <status_LO status_HI> <CRC_LO CRC_HI>（12 字节）
+                状态数据按小端 uint16 解析 → bit reversal → 提取 Bit0~Bit9。
+        """
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "读取失败",
                 "串口未连接，无法读取传感器状态。"
             )
             return
-        self._on_sensor_tick()
+
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            QMessageBox.warning(
+                self, "读取失败",
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数"
+            )
+            return
+
+        request = build_gw_sensor_status_read_frame(slave)
+        hex_req = " ".join(f"{b:02X}" for b in request)
+
+        try:
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                QMessageBox.warning(
+                    self, "读取失败",
+                    "设备无响应（超时），请检查串口连接和从机地址。"
+                )
+                return
+
+            parsed = parse_gw_sensor_status_response(list(resp_bytes))
+            if parsed is None:
+                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+                QMessageBox.warning(
+                    self, "读取失败",
+                    f"响应帧解析失败：\n{hex_resp}\n\n"
+                    f"（期望：FC=0x{GW_FC:02X} + 12 字节 + CRC 通过）"
+                )
+                return
+
+            # 更新 UI（与自动采集同逻辑）
+            if parsed["sensor_status"]:
+                self.sensor_main_dot.setStyleSheet(
+                    f"background: {theme.HEX['DANGER']}; border-radius: 7px; border: none;"
+                )
+                self.sensor_main_text.setText("异常")
+                self.sensor_main_text.setStyleSheet(
+                    f"color: {theme.HEX['DANGER']}; font-size: {theme.FS_MD}pt; "
+                    f"font-weight: {theme.FW_BOLD};"
+                )
+            else:
+                self.sensor_main_dot.setStyleSheet(
+                    f"background: {theme.HEX['OK']}; border-radius: 7px; border: none;"
+                )
+                self.sensor_main_text.setText("正常")
+                self.sensor_main_text.setStyleSheet(
+                    f"color: {theme.HEX['OK']}; font-size: {theme.FS_MD}pt; "
+                    f"font-weight: {theme.FW_BOLD};"
+                )
+
+            status_keys = [
+                "leak_alarm", "liquefaction_alarm",
+                "lock2_wiring_fault", "lock1_wiring_fault", "alarm_wiring_fault",
+                "lock2_action", "lock1_action", "alarm_action",
+                "overpressure_alarm",
+            ]
+            status_labels = [
+                "泄漏报警", "液化报警",
+                "闭锁2接线故障", "闭锁1接线故障", "报警接线故障",
+                "闭锁2动作", "闭锁1动作", "报警动作",
+                "超压报警",
+            ]
+            for box, key in zip(self._sensor_boxes, status_keys):
+                box.set_state("warn" if parsed.get(key, False) else "ok")
+
+            self.sensor_state_tag.update_state("已采集", "ok")
+
+            # 汇总弹窗
+            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+            status_lines = [
+                f"  传感器状态：{'异常' if parsed['sensor_status'] else '正常'}",
+            ]
+            for label, key in zip(status_labels, status_keys):
+                val = "异常" if parsed.get(key, False) else "正常"
+                status_lines.append(f"  {label}：{val}")
+            QMessageBox.information(
+                self, "读取成功",
+                f"已从设备（从机地址 {slave}）读取传感器状态\n\n"
+                f"请求：{hex_req}\n"
+                f"响应：{hex_resp}\n\n"
+                f"解析结果：\n" + "\n".join(status_lines)
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
 
     def _toggle_auto_sensor(self):
         """切换自动采集开关"""
@@ -1281,46 +1437,168 @@ class GwConfigPage(QWidget):
             self.sensor_state_tag.update_state("已停止", "warn")
 
     def _on_sensor_tick(self):
-        """每轮采集：模拟读取 9 路传感器状态位"""
-        import random
+        """每轮采集：从设备读取传感器状态（10 个状态位）"""
         if not serial_manager.is_connected:
             self.sensor_state_tag.update_state("未连接", "warn")
             return
-        # 主状态：默认 ok（绿色 + "正常"），10% 概率 warn（红色 + "异常"）
-        main_state = "warn" if random.random() < 0.1 else "ok"
-        if main_state == "warn":
-            self.sensor_main_dot.setStyleSheet(
-                f"background: {theme.HEX['DANGER']}; border-radius: 7px; border: none;"
-            )
-            self.sensor_main_text.setText("异常")
-            self.sensor_main_text.setStyleSheet(
-                f"color: {theme.HEX['DANGER']}; font-size: {theme.FS_MD}pt; "
-                f"font-weight: {theme.FW_BOLD};"
-            )
-        else:
-            self.sensor_main_dot.setStyleSheet(
-                f"background: {theme.HEX['OK']}; border-radius: 7px; border: none;"
-            )
-            self.sensor_main_text.setText("正常")
-            self.sensor_main_text.setStyleSheet(
-                f"color: {theme.HEX['OK']}; font-size: {theme.FS_MD}pt; "
-                f"font-weight: {theme.FW_BOLD};"
-            )
-        # 9 个状态框：二态（绿/红），约 15% 异常
-        for box in self._sensor_boxes:
-            box.set_state("warn" if random.random() < 0.15 else "ok")
+
+        # modbus 从机地址取自顶卡「表计通讯地址」
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            self.sensor_state_tag.update_state("地址无效", "warn")
+            return
+
+        try:
+            # 构建请求帧：<slave> 66 03 01 22 01 <CRC>
+            request = build_gw_sensor_status_read_frame(slave)
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                self.sensor_state_tag.update_state("未采集", "warn")
+                return
+
+            parsed = parse_gw_sensor_status_response(list(resp_bytes))
+            if parsed is None:
+                self.sensor_state_tag.update_state("未采集", "warn")
+                return
+
+            # 主状态（Bit0 = sensor_status）：0=正常（绿），1=异常（红）
+            if parsed["sensor_status"]:
+                self.sensor_main_dot.setStyleSheet(
+                    f"background: {theme.HEX['DANGER']}; border-radius: 7px; border: none;"
+                )
+                self.sensor_main_text.setText("异常")
+                self.sensor_main_text.setStyleSheet(
+                    f"color: {theme.HEX['DANGER']}; font-size: {theme.FS_MD}pt; "
+                    f"font-weight: {theme.FW_BOLD};"
+                )
+            else:
+                self.sensor_main_dot.setStyleSheet(
+                    f"background: {theme.HEX['OK']}; border-radius: 7px; border: none;"
+                )
+                self.sensor_main_text.setText("正常")
+                self.sensor_main_text.setStyleSheet(
+                    f"color: {theme.HEX['OK']}; font-size: {theme.FS_MD}pt; "
+                    f"font-weight: {theme.FW_BOLD};"
+                )
+
+            # 9 个状态框（Bit1~Bit9）：0=正常（绿），1=故障/动作（红）
+            status_keys = [
+                "leak_alarm",            # Bit1: 泄漏
+                "liquefaction_alarm",    # Bit2: 液化
+                "lock2_wiring_fault",    # Bit3: 闭锁2接线
+                "lock1_wiring_fault",    # Bit4: 闭锁1接线
+                "alarm_wiring_fault",    # Bit5: 报警接线
+                "lock2_action",          # Bit6: 闭锁2动作
+                "lock1_action",          # Bit7: 闭锁1动作
+                "alarm_action",          # Bit8: 报警动作
+                "overpressure_alarm",    # Bit9: 超压报警
+            ]
+            for box, key in zip(self._sensor_boxes, status_keys):
+                box.set_state("warn" if parsed.get(key, False) else "ok")
+
+            self.sensor_state_tag.update_state("已采集", "ok")
+        except Exception:
+            # 自动采集时异常不弹窗，仅更新状态
+            self.sensor_state_tag.update_state("未采集", "warn")
 
     # ===== 第四卡：温度压力密度数据 读取 / 自动采集 =====
 
     def _on_read_realtime_data(self):
-        """手动读取一次实时数据"""
+        """手动读取一次温度压力密度数据
+
+        协议（FC=0x66，非标准 Modbus）：
+          请求：<slave> 66 09 01 22 02 22 03 22 04 22 05 <CRC_LO CRC_HI>（14 字节）
+          响应：<slave> 66 21 81 <组0> <组1> <组2> <组3> <CRC_LO CRC_HI>（38 字节）
+                每组 8 字节：<DI_LO DI_HI fmt_LO fmt_HI float32_LE×4>
+                DI: 22 02=密度 / 22 03=温度 / 22 04=相对压力 / 22 05=微水
+                数据按 float32 小端解析；全 FF 显示 ------。
+        """
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "读取失败",
-                "串口未连接，无法读取实时数据。"
+                "串口未连接，无法读取温度压力密度数据。"
             )
             return
-        self._on_realtime_tick()
+
+        # modbus 从机地址取自顶卡「表计通讯地址」
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            QMessageBox.warning(
+                self, "读取失败",
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数"
+            )
+            return
+
+        # 构建请求帧
+        request = build_gw_realtime_read_frame(slave)
+        hex_req = " ".join(f"{b:02X}" for b in request)
+
+        try:
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                QMessageBox.warning(
+                    self, "读取失败",
+                    "设备无响应（超时），请检查串口连接和从机地址。"
+                )
+                return
+
+            parsed = parse_gw_realtime_read_response(list(resp_bytes))
+            if parsed is None:
+                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+                QMessageBox.warning(
+                    self, "读取失败",
+                    f"响应帧解析失败：\n{hex_resp}\n\n"
+                    f"（期望：FC=0x{GW_FC:02X} + 38 字节 + CRC 通过）"
+                )
+                return
+
+            # DI → metric 名称的映射
+            di_to_metric = {
+                GW_REALTIME_DI_DENSITY:  "density",
+                GW_REALTIME_DI_TEMP:     "temp",
+                GW_REALTIME_DI_PRESSURE: "pressure",
+                GW_REALTIME_DI_WATER:    "water",
+            }
+
+            filled: list[tuple[str, str]] = []
+            for di, name in di_to_metric.items():
+                if di in parsed:
+                    val = parsed[di]
+                    if val is None:
+                        # 设备返回全 0xFF → 显示 ------
+                        self._realtime_metrics[name].value.setText(
+                            f'<small><font color="{theme.HEX["MUTED"]}">------</font></small>'
+                        )
+                        filled.append((name, "------"))
+                    else:
+                        self._realtime_metrics[name].set_value(val, True)
+                        decimals = self._realtime_metrics[name]._decimals
+                        filled.append((name, f"{val:.{decimals}f}"))
+                else:
+                    # 响应中未包含该 DI
+                    self._realtime_metrics[name].set_value(None, False)
+
+            self.realtime_state_tag.update_state("已采集", "ok")
+
+            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
+            field_labels = {
+                "density":  "密度值",
+                "temp":     "温度值",
+                "pressure": "相对压力",
+                "water":    "微水",
+            }
+            filled_lines = "\n".join(
+                f"  {field_labels[n]}：{v}" for n, v in filled
+            )
+            QMessageBox.information(
+                self, "读取成功",
+                f"已从设备（从机地址 {slave}）读取温度压力密度数据\n\n"
+                f"请求：{hex_req}\n"
+                f"响应：{hex_resp}\n\n"
+                f"解析结果：\n{filled_lines}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
 
     def _toggle_auto_realtime(self):
         """切换实时数据自动采集开关"""
@@ -1342,26 +1620,58 @@ class GwConfigPage(QWidget):
             self.realtime_state_tag.update_state("已停止", "warn")
 
     def _on_realtime_tick(self):
-        """每轮采集：模拟读取 4 路实时数据"""
-        import random
+        """每轮采集：从设备读取 4 路温度压力密度数据（无弹窗，静默更新）"""
         if not serial_manager.is_connected:
             self.realtime_state_tag.update_state("未连接", "warn")
             for m in self._realtime_metrics.values():
                 m.set_value(None, False)
             return
-        # 模拟数值（演示用，按 SF6 密度监测典型范围）
-        self._realtime_metrics["density"].set_value(
-            round(40 + random.uniform(-2, 2), 3), True
-        )
-        self._realtime_metrics["temp"].set_value(
-            round(20 + random.uniform(-5, 15), 1), True
-        )
-        self._realtime_metrics["pressure"].set_value(
-            round(0.35 + random.uniform(-0.05, 0.05), 3), True
-        )
-        self._realtime_metrics["water"].set_value(
-            round(80 + random.uniform(-20, 40), 2), True
-        )
+
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
+            self.realtime_state_tag.update_state("地址无效", "warn")
+            return
+
+        try:
+            request = build_gw_realtime_read_frame(slave)
+            resp_bytes = serial_manager.transact(bytes(request))
+            if not resp_bytes:
+                self.realtime_state_tag.update_state("未采集", "warn")
+                for m in self._realtime_metrics.values():
+                    m.set_value(None, False)
+                return
+
+            parsed = parse_gw_realtime_read_response(list(resp_bytes))
+            if parsed is None:
+                self.realtime_state_tag.update_state("未采集", "warn")
+                for m in self._realtime_metrics.values():
+                    m.set_value(None, False)
+                return
+
+            di_to_metric = {
+                GW_REALTIME_DI_DENSITY:  "density",
+                GW_REALTIME_DI_TEMP:     "temp",
+                GW_REALTIME_DI_PRESSURE: "pressure",
+                GW_REALTIME_DI_WATER:    "water",
+            }
+
+            for di, name in di_to_metric.items():
+                if di in parsed:
+                    val = parsed[di]
+                    if val is None:
+                        # 设备返回全 0xFF → 显示 ------
+                        self._realtime_metrics[name].value.setText(
+                            f'<small><font color="{theme.HEX["MUTED"]}">------</font></small>'
+                        )
+                    else:
+                        self._realtime_metrics[name].set_value(val, True)
+                else:
+                    self._realtime_metrics[name].set_value(None, False)
+
+            self.realtime_state_tag.update_state("采集中", "ok")
+        except Exception:
+            # 自动采集时异常不弹窗，仅更新状态
+            self.realtime_state_tag.update_state("未采集", "warn")
 
     # ===== 第五卡：阈值设置 读 / 写 =====
 
