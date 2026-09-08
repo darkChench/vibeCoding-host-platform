@@ -279,26 +279,86 @@ class SerialManager(QObject):
             resp = [slave_id, fc, byte_count] + data_bytes
         elif fc == GW_FC:
             # 国网协议：第 3 字节（byteCount）是读写路由的依据
-            #   byteCount == 0x03 → 读请求（payload = 01 20 00）
+            #   byteCount == 0x03 + payload 01 20 00 → 读表计通信标识
+            #   byteCount == 0x03 + payload 01 22 01 → 读传感器状态
+            #   byteCount == 0x09 → 读阈值/实时数据（payload = 01 + 4×DI，2 字节/DI）
             #   byteCount == 0x06 → 单字节写（payload = 5 头 + 1 数据）
             #   byteCount == 0x0C → 日期时间写（payload = 5 头 + 7 数据）
             byte_count = req[2] if len(req) > 2 else 0
             if byte_count == 0x03:
-                # 读响应（20 字节）：按设备实际报文结构生成模拟值
-                now = time.localtime()
-                year_lo = (now.tm_year) & 0xFF
-                year_hi = (now.tm_year >> 8) & 0xFF
-                # 5 字节头（协议固定，0x81 0x20 0x00 0x41 0x0A）
-                header = [0x81, 0x20, 0x00, 0x41, 0x0A]
-                payload = [
-                    slave_id,           # 通讯地址 = 当前从机
-                    2,                  # 波特率代码：9600
-                    0,                  # 校验位代码：无校验
-                    year_lo, year_hi,   # 年（小端）
-                    now.tm_mon, now.tm_mday,
-                    now.tm_hour, now.tm_min, now.tm_sec,
-                ]
-                resp = [slave_id, fc, len(header) + len(payload)] + header + payload
+                # 区分读表计通信标识 vs 读传感器状态（按 payload 第 2~3 字节）
+                payload_sig = req[4:6] if len(req) >= 6 else []
+                if payload_sig == [0x22, 0x01]:
+                    # 传感器状态读取响应（12 字节）：
+                    #   <slave> 66 07 81 22 01 04 02 <status_LO> <status_HI> <CRC×2>
+                    # 模拟：随机生成 10 个状态位（约 20% 概率异常）
+                    status_val = 0
+                    for bit_idx in range(10):
+                        if random.random() < 0.2:
+                            status_val |= (1 << bit_idx)
+                    # 按协议：小端 uint16 存储，解析时会做 bit reversal
+                    # 为让 UI 显示符合预期，直接存原始值（解析器会反转）
+                    status_lo = status_val & 0xFF
+                    status_hi = (status_val >> 8) & 0xFF
+                    header = [0x81, 0x22, 0x01, 0x04, 0x02]
+                    payload = header + [status_lo, status_hi]
+                    resp = [slave_id, fc, len(payload)] + payload
+                else:
+                    # 读表计通信标识响应（20 字节）
+                    now = time.localtime()
+                    year_lo = (now.tm_year) & 0xFF
+                    year_hi = (now.tm_year >> 8) & 0xFF
+                    # 5 字节头（协议固定，0x81 0x20 0x00 0x41 0x0A）
+                    header = [0x81, 0x20, 0x00, 0x41, 0x0A]
+                    payload = [
+                        slave_id,           # 通讯地址 = 当前从机
+                        2,                  # 波特率代码：9600
+                        0,                  # 校验位代码：无校验
+                        year_lo, year_hi,   # 年（小端）
+                        now.tm_mon, now.tm_mday,
+                        now.tm_hour, now.tm_min, now.tm_sec,
+                    ]
+                    resp = [slave_id, fc, len(header) + len(payload)] + header + payload
+            elif byte_count == 0x07:
+                # 设备基本信息标识读取响应（TLV 格式）：
+                #   <slave> 66 <byteCount> 81 <TLV×3> <CRC×2>
+                # TLV 格式：<type=0x21> <id> <sub> <data_len> <data×data_len>
+                prefix = [0x81]
+                # 21 01：设备型号 "RDM" + 13 字节 0x00 填充（共 16 字节）
+                model_data = list(b"RDM") + [0x00] * 13
+                tlv_model = [0x21, 0x01, 0x05, len(model_data)] + model_data
+                # 21 02：表计 ID（H）示例 "C1C408200000"（6 字节）
+                mid_h_data = [0xC1, 0xC4, 0x08, 0x20, 0x00, 0x00]
+                tlv_mid_h = [0x21, 0x02, 0x04, len(mid_h_data)] + mid_h_data
+                # 21 03：传感器类型 0x01 = SF6数字化密度表（1 字节）
+                tlv_sensor = [0x21, 0x03, 0x20, 0x01, 0x01]
+                payload = prefix + tlv_model + tlv_mid_h + tlv_sensor
+                resp = [slave_id, fc, len(payload)] + payload
+            elif byte_count == 0x09:
+                # 阈值读取响应（38 字节）：
+                #   <slave> 66 21 81 [DI×2 fmt×2 float32_LE×4]×4 <CRC×2>
+                # 模拟：4 组阈值用 4 个不同演示值
+                from ..protocol.modbus_protocol import (
+                    GW_THRESHOLD_DI_ALARM, GW_THRESHOLD_DI_LOCK1,
+                    GW_THRESHOLD_DI_LOCK2, GW_THRESHOLD_DI_OVERPRESS,
+                    float32_to_bytes_le,
+                )
+                mock_values = {
+                    GW_THRESHOLD_DI_ALARM:     0.45,  # 报警节点阈值
+                    GW_THRESHOLD_DI_LOCK1:     0.35,  # 闭锁1阈值
+                    GW_THRESHOLD_DI_LOCK2:     0.30,  # 闭锁2阈值
+                    GW_THRESHOLD_DI_OVERPRESS: 0.55,  # 超压节点阈值
+                }
+                groups = []
+                for di in (GW_THRESHOLD_DI_ALARM, GW_THRESHOLD_DI_LOCK1,
+                           GW_THRESHOLD_DI_LOCK2, GW_THRESHOLD_DI_OVERPRESS):
+                    di_bytes = [(di >> 8) & 0xFF, di & 0xFF]
+                    fmt_bytes = [0x26, 0x04]  # 协议固定：4 字节 float32
+                    data_bytes = float32_to_bytes_le(mock_values[di])
+                    groups.extend(di_bytes + fmt_bytes + data_bytes)
+                prefix = [0x81]
+                payload = prefix + groups
+                resp = [slave_id, fc, len(payload)] + payload
             else:
                 # 国网协议写命令：按"回显请求"约定返回。
                 # 请求已包含 CRC → 直接回传，不再追加 CRC。

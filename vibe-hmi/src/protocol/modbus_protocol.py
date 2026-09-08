@@ -10,6 +10,7 @@ Modbus RTU 协议层
 PySide6 阶段：把 simulate_read_response / transact_once 替换为
 pymodbus 的 client.read_holding_registers / write_register，接口不变。
 """
+import math
 import struct
 import random
 import time
@@ -297,6 +298,344 @@ def parse_gw_write_response(resp: list[int], request: list[int]) -> dict | None:
     }
 
 
+# 国网协议（阈值设置）读取
+# 请求帧：<slave> 66 09 01 22 06 22 07 22 08 22 09 <CRC_LO> <CRC_HI>（14 字节）
+#   - byteCount=9：1 字节前缀(0x01) + 4 个 DI（每个 2 字节）
+# 响应帧：<slave> 66 21 81 <组0> <组1> <组2> <组3> <CRC_LO> <CRC_HI>（38 字节）
+#   - byteCount=33：1 字节前缀(0x81) + 4 个数据组（每组 8 字节）
+#   - 每组布局：<DI_LO DI_HI> <fmt_LO fmt_HI> <float32_BE×4>
+#   - 26 04 表示后续 4 字节是 float32 数据
+# 国网协议（温度压力密度数据）读取
+# 请求帧：<slave> 66 09 01 22 02 22 03 22 04 22 05 <CRC_LO> <CRC_HI>（14 字节）
+#   - byteCount=9：1 字节前缀(0x01) + 4 个 DI（每个 2 字节）
+# 响应帧：<slave> 66 21 81 <组0> <组1> <组2> <组3> <CRC_LO> <CRC_HI>（38 字节）
+#   - byteCount=33：1 字节前缀(0x81) + 4 个数据组（每组 8 字节）
+#   - 每组布局：<DI_LO DI_HI> <fmt_LO fmt_HI> <float32_LE×4>
+#   - 26 04 表示后续 4 字节是 float32 数据
+GW_REALTIME_DI_DENSITY   = 0x2202  # 密度值
+GW_REALTIME_DI_TEMP      = 0x2203  # 温度值
+GW_REALTIME_DI_PRESSURE  = 0x2204  # 相对压力
+GW_REALTIME_DI_WATER     = 0x2205  # 微水
+
+# 4 个实时数据 DI（顺序固定）
+GW_REALTIME_DIS = [
+    GW_REALTIME_DI_DENSITY,
+    GW_REALTIME_DI_TEMP,
+    GW_REALTIME_DI_PRESSURE,
+    GW_REALTIME_DI_WATER,
+]
+
+
+def build_gw_realtime_read_frame(slave_id: int) -> list[int]:
+    """生成国网协议「读取温度压力密度数据」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 09 01 22 02 22 03 22 04 22 05 <CRC_LO> <CRC_HI>
+    长度固定 14 字节；byteCount=9（1 字节前缀 + 4 个 2 字节 DI）。
+
+    例：slave=2 → [02, 66, 09, 01, 22, 02, 22, 03,
+                   22, 04, 22, 05, D1, 6A]
+    """
+    payload = [0x01]  # 读请求前缀
+    for di in GW_REALTIME_DIS:
+        payload.append((di >> 8) & 0xFF)  # DI 高字节
+        payload.append(di & 0xFF)         # DI 低字节
+    byte_count = len(payload) & 0xFF
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def parse_gw_realtime_read_response(resp: list[int]) -> dict | None:
+    """解析国网协议「读取温度压力密度数据」响应。
+
+    响应结构（38 字节）：
+        [0]      slave
+        [1]      FC (0x66)
+        [2]      byte count (0x21 = 33)
+        [3]      prefix (0x81)
+        [4..35]  数据区（32 字节 = 4 组 × 8 字节），每组：
+                  [DI_LO DI_HI fmt_LO fmt_HI float32_LE×4]
+        [36..37] CRC（LE 2 字节）
+
+    数据为 IEEE754 float32 小端（低字节在前）：
+        例：字节序列 "40 D4 06 BB" → 0xBB06D440 → float32 密度值
+
+    设备用全 0xFF（4 字节 = NaN）表示该字段"无效/未采集"，
+    解析时该 DI 的值设为 None，由 UI 显示 `------`。
+
+    返回 {DI: float_value | None} 字典；
+    CRC / FC / 长度校验失败返回 None。
+    """
+    # 最少需要：1(slave) + 1(FC) + 1(byteCount) + 1(prefix) + 8*4 + 2(CRC) = 38
+    if len(resp) < 4 + 8 * 4 + 2:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    # 数据区：去掉 slave/FC/byteCount/prefix 头和 CRC 尾
+    payload = resp[4:-2]
+    if len(payload) < 8 * 4:
+        return None
+
+    values: dict[int, float | None] = {}
+    # 每组 8 字节：DI(2) + fmt(2) + float32 LE(4)
+    for i in range(len(payload) // 8):
+        offset = i * 8
+        di = (payload[offset] << 8) | payload[offset + 1]
+        data = payload[offset + 4:offset + 8]
+        # 全 0xFF = NaN（设备"无效/未采集"标记），值设为 None
+        if data == [0xFF, 0xFF, 0xFF, 0xFF]:
+            values[di] = None
+            continue
+        try:
+            value = struct.unpack("<f", bytes(data))[0]
+        except Exception:
+            values[di] = None
+            continue
+        if math.isnan(value) or math.isinf(value):
+            values[di] = None
+            continue
+        values[di] = value
+
+    return values
+
+
+GW_THRESHOLD_DI_ALARM     = 0x2206  # 报警节点阈值
+GW_THRESHOLD_DI_LOCK1     = 0x2207  # 闭锁1阈值
+GW_THRESHOLD_DI_LOCK2     = 0x2208  # 闭锁2阈值
+GW_THRESHOLD_DI_OVERPRESS = 0x2209  # 超压节点阈值
+
+# 4 个阈值 DI（顺序固定，DI 高字节在前便于构造帧）
+GW_THRESHOLD_DIS = [
+    GW_THRESHOLD_DI_ALARM,
+    GW_THRESHOLD_DI_LOCK1,
+    GW_THRESHOLD_DI_LOCK2,
+    GW_THRESHOLD_DI_OVERPRESS,
+]
+
+
+def build_gw_threshold_read_frame(slave_id: int) -> list[int]:
+    """生成国网协议「读取阈值」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 09 01 22 06 22 07 22 08 22 09 <CRC_LO> <CRC_HI>
+    长度固定 14 字节；byteCount=9（1 字节前缀 + 4 个 2 字节 DI）。
+
+    例：slave=2 → [02, 66, 09, 01, 22, 06, 22, 07,
+                   22, 08, 22, 09, A5, 6C]
+    """
+    payload = [0x01]  # 读请求前缀
+    for di in GW_THRESHOLD_DIS:
+        payload.append((di >> 8) & 0xFF)  # DI 高字节
+        payload.append(di & 0xFF)         # DI 低字节
+    byte_count = len(payload) & 0xFF
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def build_gw_threshold_write_frame(slave_id: int, di: int,
+                                   data_bytes: list[int]) -> list[int]:
+    """生成国网协议「写入单个阈值」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 09 02 <DI_HI> <DI_LO> 26 04 <data×4> <CRC_LO> <CRC_HI>
+    长度固定 17 字节；byteCount=9（1 字节前缀 + 2 字节 DI + 2 字节 fmt + 4 字节数据）。
+
+    参数：
+        slave_id: 从机地址（1~247）
+        di: DI 标识（0x2206=报警 / 0x2207=闭锁1 / 0x2208=闭锁2 / 0x2209=超压）
+        data_bytes: 4 字节数据（float32 小端，或全 FFFFFFFF 表示无效/未配置）
+
+    例：slave=1, di=0x2206, data=[0x9A,0x99,0x19,0x3F]（0.6 的 float32 LE）→
+        01 66 09 02 22 06 26 04 9A 99 19 3F 16 77
+    """
+    if not (1 <= slave_id <= 247):
+        raise ValueError(f"从机地址必须 1~247，得到 {slave_id}")
+    if len(data_bytes) != 4:
+        raise ValueError(f"数据必须为 4 字节，得到 {len(data_bytes)} 字节")
+    payload = [
+        0x02,                       # 写命令前缀
+        (di >> 8) & 0xFF,          # DI 高字节
+        di & 0xFF,                 # DI 低字节
+        0x26, 0x04,                # 格式标识（4 字节 float32）
+    ] + list(data_bytes)
+    byte_count = len(payload) & 0xFF  # = 0x09
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def parse_gw_threshold_write_response(resp: list[int], request: list[int]) -> dict | None:
+    """解析国网协议「阈值写入」响应。
+
+    响应按"回显请求"约定：设备收到合法写命令后原样回传，
+    上层按 CRC + byteCount 判定成功与否。
+
+    返回：
+        ok: True 表示回包 CRC 通过且 FC 正确
+        echo: 回包原始字节列表
+    失败返回 None。
+    """
+    # 最少：slave(1) + FC(1) + byteCount(1) + data + CRC(2) = 至少 5 字节
+    if len(resp) < 5:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+    return {
+        "ok": True,
+        "echo": resp,
+    }
+
+
+def parse_gw_threshold_read_response(resp: list[int]) -> dict | None:
+    """解析国网协议「读取阈值」响应。
+
+    响应结构（38 字节）：
+        [0]      slave
+        [1]      FC (0x66)
+        [2]      byte count (0x21 = 33)
+        [3]      prefix (0x81)
+        [4..35]  数据区（32 字节 = 4 组 × 8 字节），每组：
+                  [DI_LO DI_HI fmt_LO fmt_HI float32_LE×4]
+        [36..37] CRC（LE 2 字节）
+
+    数据为 IEEE754 float32 小端（低字节在前）：
+        例：字节序列 "14 AE 07 3F" → 0x3F07AE14 → 0.7800
+
+    设备用全 0xFF（4 字节 = NaN）表示该阈值"无效/未配置"，解析时直接跳过，
+    返回字典中不会出现该 DI，由 UI 显示 `------`。
+
+    返回 {DI: float_value} 字典（仅含有效数值的 DI）；
+    CRC / FC / 长度校验失败返回 None。
+    """
+    # 最少需要：1(slave) + 1(FC) + 1(byteCount) + 1(prefix) + 8*4 + 2(CRC) = 38
+    if len(resp) < 4 + 8 * 4 + 2:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    # 数据区：去掉 slave/FC/byteCount/prefix 头和 CRC 尾
+    payload = resp[4:-2]
+    if len(payload) < 8 * 4:
+        return None
+
+    values: dict[int, float] = {}
+    # 每组 8 字节：DI(2) + fmt(2) + float32 LE(4)
+    for i in range(len(payload) // 8):
+        offset = i * 8
+        di = (payload[offset] << 8) | payload[offset + 1]
+        # fmt = (payload[offset+2] << 8) | payload[offset+3]  # 协议固定 26 04，暂未使用
+        data = payload[offset + 4:offset + 8]
+        # 全 0xFF = NaN（设备"无效/未配置"标记），跳过不入字典
+        if data == [0xFF, 0xFF, 0xFF, 0xFF]:
+            continue
+        try:
+            value = struct.unpack("<f", bytes(data))[0]
+        except Exception:
+            continue
+        # 防御性：struct.unpack 也可能给出 NaN（异常位模式），同样视为无效
+        if math.isnan(value) or math.isinf(value):
+            continue
+        values[di] = value
+
+    return values
+
+
+# 国网协议（传感器状态）读取
+# 请求帧：<slave> 66 03 01 22 01 <CRC_LO> <CRC_HI>（8 字节）
+#   - byteCount=3：1 字节前缀(0x01) + 1 个 DI(2 字节)
+# 响应帧：<slave> 66 07 81 22 01 04 02 <status_LO> <status_HI> <CRC_LO> <CRC_HI>（12 字节）
+#   - byteCount=7：1 字节前缀(0x81) + 2 字节 DI + 2 字节长度(04 02) + 2 字节状态数据
+#   - 状态数据按小端 uint16 解析，再按位反转后提取 Bit0~Bit9
+GW_SENSOR_STATUS_DI = 0x2201  # 传感器状态 DI 标识
+
+
+def build_gw_sensor_status_read_frame(slave_id: int) -> list[int]:
+    """生成国网协议「读取传感器状态」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 03 01 22 01 <CRC_LO> <CRC_HI>
+    长度固定 8 字节；byteCount=3（1 字节前缀 + 1 个 2 字节 DI）。
+
+    例：slave=2 → [02, 66, 03, 01, 22, 01, 81, 15]
+    """
+    payload = [
+        0x01,                               # 读请求前缀
+        (GW_SENSOR_STATUS_DI >> 8) & 0xFF,  # DI 高字节 (0x22)
+        GW_SENSOR_STATUS_DI & 0xFF,         # DI 低字节 (0x01)
+    ]
+    byte_count = len(payload) & 0xFF  # = 0x03
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def parse_gw_sensor_status_response(resp: list[int]) -> dict | None:
+    """解析国网协议「读取传感器状态」响应。
+
+    响应结构（12 字节）：
+        [0]      slave
+        [1]      FC (0x66)
+        [2]      byte count (0x07 = 7)
+        [3]      prefix (0x81)
+        [4..5]   DI (0x2201)
+        [6..7]   长度标识 (0x04 0x02)
+        [8..9]   状态数据（小端 uint16）
+        [10..11] CRC（LE 2 字节）
+
+    状态数据解析步骤：
+        1. 小端 uint16 解析（如字节 C2 01 → 0x01C2）
+        2. 转 16 位二进制字符串
+        3. 反转字符串（bit reversal）
+        4. 提取 Bit0~Bit9（0=正常，1=故障/动作）
+
+    返回字典：
+        sensor_status: bool (Bit0 - 传感器整体状态)
+        leak_alarm: bool (Bit1 - 泄漏报警)
+        liquefaction_alarm: bool (Bit2 - 液化报警)
+        lock2_wiring_fault: bool (Bit3 - 闭锁2节点接线故障)
+        lock1_wiring_fault: bool (Bit4 - 闭锁1节点接线故障)
+        alarm_wiring_fault: bool (Bit5 - 报警节点接线故障)
+        lock2_action: bool (Bit6 - 闭锁2信号节点动作)
+        lock1_action: bool (Bit7 - 闭锁1信号节点动作)
+        alarm_action: bool (Bit8 - 报警信号节点动作)
+        overpressure_alarm: bool (Bit9 - 超压报警)
+
+    CRC / FC / 长度校验失败返回 None。
+    """
+    # 最少需要：1(slave) + 1(FC) + 1(byteCount) + 1(prefix) + 2(DI) + 2(len) + 2(status) + 2(CRC) = 12
+    if len(resp) < 12:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    # 提取状态数据（小端 uint16）
+    status_raw = (resp[9] << 8) | resp[8]  # 小端：低字节在前
+
+    # 转 16 位二进制字符串并反转（bit reversal）
+    # 例：0x01C2 = "0000000111000010" → 反转 → "0100000111000000"
+    # 反转后，字符串从左到右依次是 Bit0, Bit1, Bit2, ...
+    bin_str = f"{status_raw:016b}"
+    reversed_str = bin_str[::-1]
+
+    # 按字符串位置提取各 bit（'0'=正常，'1'=故障/动作）
+    # reversed_str[0] = Bit0, reversed_str[1] = Bit1, ...
+    return {
+        "sensor_status":        reversed_str[0] == '1',  # Bit0
+        "leak_alarm":           reversed_str[1] == '1',  # Bit1
+        "liquefaction_alarm":   reversed_str[2] == '1',  # Bit2
+        "lock2_wiring_fault":   reversed_str[3] == '1',  # Bit3
+        "lock1_wiring_fault":   reversed_str[4] == '1',  # Bit4
+        "alarm_wiring_fault":   reversed_str[5] == '1',  # Bit5
+        "lock2_action":         reversed_str[6] == '1',  # Bit6
+        "lock1_action":         reversed_str[7] == '1',  # Bit7
+        "alarm_action":         reversed_str[8] == '1',  # Bit8
+        "overpressure_alarm":   reversed_str[9] == '1',  # Bit9
+    }
+
+
 def float32_to_bytes(value: float) -> list[int]:
     """float32 → 4 字节（IEEE754 Big-Endian，高字在前）"""
     return list(struct.pack(">f", value))
@@ -305,6 +644,136 @@ def float32_to_bytes(value: float) -> list[int]:
 def bytes_to_float32(data: list[int]) -> float:
     """4 字节 → float32（IEEE754 Big-Endian）"""
     return struct.unpack(">f", bytes(data))[0]
+
+
+def float32_to_bytes_le(value: float) -> list[int]:
+    """float32 → 4 字节（IEEE754 Little-Endian，低字节在前）"""
+    return list(struct.pack("<f", value))
+
+
+def bytes_to_float32_le(data: list[int]) -> float:
+    """4 字节 → float32（IEEE754 Little-Endian，低字节在前）"""
+    return struct.unpack("<f", bytes(data))[0]
+
+
+# 国网协议（设备基本信息标识）读取
+# 请求帧：<slave> 66 07 01 21 01 21 02 21 03 <CRC_LO> <CRC_HI>（12 字节）
+#   - byteCount=7：1 字节前缀(0x01) + 3 个 DI（每个 2 字节：21 01/21 02/21 03）
+# 响应帧：<slave> 66 <byteCount> 81 <TLV×3> <CRC_LO> <CRC_HI>
+#   - TLV 每项格式：<type=0x21> <id> <sub> <data_len> <data×data_len>
+#     sub: 子项编号（协议内部用，解析时跳过）
+#     data_len: 纯数据字节数
+#     · 21 01 sub=0x05 data_len=0x10(16)：设备型号（ASCII，16 字节，不足补 0x00）
+#     · 21 02 sub=0x04 data_len=0x06(6)：表计 ID（H）（十六进制字节序列，6 字节）
+#     · 21 03 sub=0x20 data_len=0x01(1)：传感器类型标识（1 字节代码）
+GW_DEV_INFO_DI_MODEL   = 0x2101  # 设备型号
+GW_DEV_INFO_DI_MID_H   = 0x2102  # 表计 ID（H）
+GW_DEV_INFO_DI_SENSOR  = 0x2103  # 传感器类型标识
+
+# 传感器类型标识映射
+GW_SENSOR_TYPE_MAP = {
+    0x01: "SF6数字化密度表",
+    0x02: "避雷器数字化泄漏电流",
+    0x03: "变压器数字化油面温度表计",
+    0x04: "变压器数字化绕组温度表计",
+    0x05: "变压器数字化油位计",
+    0x06: "变压器数字化气体继电器",
+}
+
+# 3 个设备信息 DI（顺序固定）
+GW_DEV_INFO_DIS = [
+    GW_DEV_INFO_DI_MODEL,
+    GW_DEV_INFO_DI_MID_H,
+    GW_DEV_INFO_DI_SENSOR,
+]
+
+
+def build_gw_dev_info_read_frame(slave_id: int) -> list[int]:
+    """生成国网协议「读取设备基本信息标识」请求帧（FC=0x66）。
+
+    帧结构：<slave> 66 07 01 21 01 21 02 21 03 <CRC_LO> <CRC_HI>
+    长度固定 12 字节；byteCount=7（1 字节前缀 + 3 个 2 字节 DI）。
+
+    例：slave=1 → 01 66 07 01 21 01 21 02 21 03 3B 9A
+    """
+    payload = [0x01]  # 读请求前缀
+    for di in GW_DEV_INFO_DIS:
+        payload.append((di >> 8) & 0xFF)  # DI 高字节
+        payload.append(di & 0xFF)         # DI 低字节
+    byte_count = len(payload) & 0xFF  # = 0x07
+    frame = [slave_id & 0xFF, GW_FC, byte_count] + payload
+    return append_crc(frame)
+
+
+def parse_gw_dev_info_response(resp: list[int]) -> dict | None:
+    """解析国网协议「读取设备基本信息标识」响应。
+
+    响应结构（实测 41 字节）：
+        [0]      slave
+        [1]      FC (0x66)
+        [2]      byte count
+        [3]      prefix (0x81)
+        [4..-3]  TLV 数据区，每项格式：
+                  <type=0x21> <id> <sub> <data_len> <data×data_len>
+        [-2..-1] CRC（LE 2 字节）
+
+    实测 TLV 项（来自真实设备回包）：
+        21 01 05 10 <16字节ASCII>  → 设备型号 "RDM\\0..."
+        21 02 04 06 <6字节hex>     → 表计 ID（H）"C1C408200000"
+        21 03 20 01 <1字节code>    → 传感器类型标识 0x01
+
+    返回字典：
+        model:       str  设备型号（ASCII，去尾部 0x00）
+        meter_id_h:  str  表计 ID（H）大写 hex 字符串
+        sensor_type: str  传感器类型名称
+        sensor_type_code: int  传感器类型原始代码
+
+    CRC / FC / 长度校验失败返回 None。
+    """
+    # 最少：1(slave) + 1(FC) + 1(byteCount) + 1(prefix) + TLV + 2(CRC)
+    # TLV 每项最少 5 字节（type+id+sub+datalen+1byte data），3 项 = 15
+    if len(resp) < 4 + 15 + 2:
+        return None
+    if resp[1] != GW_FC:
+        return None
+    if not verify_crc(resp):
+        return None
+
+    # 数据区：去掉 slave/FC/byteCount/prefix 头和 CRC 尾
+    payload = resp[4:-2]
+
+    # 解析 TLV：<type> <id> <sub> <data_len> <data×data_len>
+    result: dict = {}
+    offset = 0
+    while offset + 4 <= len(payload):
+        tlv_type = payload[offset]
+        tlv_id = payload[offset + 1]
+        # payload[offset+2] = sub（子项编号，跳过）
+        data_len = payload[offset + 3]  # 第 4 字节 = 纯数据字节数
+        if offset + 4 + data_len > len(payload):
+            break  # 数据不足，停止解析
+        data = payload[offset + 4:offset + 4 + data_len]
+        di = (tlv_type << 8) | tlv_id
+
+        if di == GW_DEV_INFO_DI_MODEL:
+            # ASCII 字符串，去掉尾部 0x00 填充
+            model_bytes = bytes(b for b in data if b != 0x00)
+            result["model"] = model_bytes.decode("ascii", errors="replace")
+        elif di == GW_DEV_INFO_DI_MID_H:
+            # 十六进制字节序列 → 大写 hex 字符串
+            result["meter_id_h"] = "".join(f"{b:02X}" for b in data)
+        elif di == GW_DEV_INFO_DI_SENSOR:
+            code = data[0] if data else 0
+            result["sensor_type_code"] = code
+            result["sensor_type"] = GW_SENSOR_TYPE_MAP.get(code, f"未知类型(0x{code:02X})")
+
+        offset += 4 + data_len
+
+    # 校验必要字段
+    if "model" not in result or "meter_id_h" not in result or "sensor_type" not in result:
+        return None
+
+    return result
 
 
 def simulate_read_response(frame: list[int], param: dict) -> dict:
