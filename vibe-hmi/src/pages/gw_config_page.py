@@ -34,6 +34,8 @@ from ..protocol.modbus_protocol import (
     GW_REALTIME_DI_PRESSURE, GW_REALTIME_DI_WATER,
     build_gw_sensor_status_read_frame, parse_gw_sensor_status_response,
     build_gw_dev_info_read_frame, parse_gw_dev_info_response,
+    build_gw_write_meter_id_frame, parse_gw_write_meter_id_response,
+    build_gw_write_device_model_frame, parse_gw_write_device_model_response,
 )
 
 
@@ -153,7 +155,7 @@ SENSOR_STATUS_NAMES = [
 
 # 4 个实时数据项：name → (显示名, 单位, 小数位数)
 REALTIME_METRICS = [
-    ("density",  "密度值",   "kg/m³", 4),
+    ("density",  "密度值",   "MPa",   4),
     ("temp",     "温度值",   "℃",    2),
     ("pressure", "相对压力", "MPa",  4),
     ("water",    "微水",     "ppm",  2),
@@ -211,6 +213,16 @@ class GwConfigPage(QWidget):
 
     def _build_ui(self):
         """整页可滚动：通信 + 设备信息 + 传感器状态 + 实时数据 + 阈值设置 5 张卡片"""
+        # 更新时间标签（必须在卡片构建之前创建，因为卡片标题栏会引用）
+        self._sensor_update_time = QLabel("")
+        self._sensor_update_time.setStyleSheet(
+            f"color: {theme.HEX['MUTED']}; font-size: 9pt; background: transparent; border: none;"
+        )
+        self._realtime_update_time = QLabel("")
+        self._realtime_update_time.setStyleSheet(
+            f"color: {theme.HEX['MUTED']}; font-size: 9pt; background: transparent; border: none;"
+        )
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -474,11 +486,13 @@ class GwConfigPage(QWidget):
         self.f_ver_num.setCurrentIndex(0)  # 默认 01
         self.f_ver_num.currentIndexChanged.connect(self._on_device_form_changed)
 
-        # 字段 5：产品序列号（文本输入框）
-        self.f_serial = NoWheelLineEdit()
-        self.f_serial.setText(str(SERIAL_DEFAULT))
-        self.f_serial.setPlaceholderText(f"{SERIAL_MIN}~{SERIAL_MAX}")
-        self.f_serial.textChanged.connect(self._on_device_form_changed)
+        # 字段 5：产品序列号（数字增减框，上下键 / 箭头可 +1/-1，最小值 300001）
+        self.f_serial = NoWheelSpinBox()
+        self.f_serial.setRange(SERIAL_MIN, SERIAL_MAX)
+        self.f_serial.setValue(SERIAL_DEFAULT)
+        self.f_serial.setSingleStep(1)
+        self.f_serial.setMinimumWidth(140)
+        self.f_serial.valueChanged.connect(self._on_device_form_changed)
 
         # 字段 6：表计 ID（H）（只读）
         self.f_meter_id_h = NoWheelLineEdit()
@@ -532,6 +546,11 @@ class GwConfigPage(QWidget):
         title.setObjectName("card-title")
         head_layout.addWidget(title)
         head_layout.addStretch()
+
+        # 更新时间标签（红框位置）
+        head_layout.addWidget(self._sensor_update_time, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        head_layout.addSpacing(8)
 
         from .params_page import StatusChip
         self.sensor_state_tag = StatusChip("未采集", "warn")
@@ -627,6 +646,11 @@ class GwConfigPage(QWidget):
         title.setObjectName("card-title")
         head_layout.addWidget(title)
         head_layout.addStretch()
+
+        # 更新时间标签（红框位置）
+        head_layout.addWidget(self._realtime_update_time, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        head_layout.addSpacing(8)
 
         from .params_page import StatusChip
         self.realtime_state_tag = StatusChip("未采集", "warn")
@@ -740,6 +764,26 @@ class GwConfigPage(QWidget):
         now = now.replace(microsecond=0)
         self.f_datetime.setDateTime(QDateTime(now))
 
+    def _update_sensor_time(self):
+        """更新传感器状态卡片的更新时间"""
+        self._sensor_update_time.setText(
+            f"更新：{datetime.now().strftime('%H:%M:%S')}"
+        )
+
+    def _update_realtime_time(self):
+        """更新温度压力密度数据卡片的更新时间"""
+        self._realtime_update_time.setText(
+            f"更新：{datetime.now().strftime('%H:%M:%S')}"
+        )
+
+    def _clear_sensor_time(self):
+        """清除传感器状态卡片的更新时间"""
+        self._sensor_update_time.setText("")
+
+    def _clear_realtime_time(self):
+        """清除温度压力密度数据卡片的更新时间"""
+        self._realtime_update_time.setText("")
+
     # ===== 状态 tag =====
 
     def _set_synced(self, synced: bool):
@@ -799,12 +843,116 @@ class GwConfigPage(QWidget):
             self.dev_state_tag.update_state("未同步", "warn")
 
     def _on_device_form_changed(self, *_args):
-        """设备信息卡任一字段改动 → 标记未同步"""
+        """设备信息卡任一字段改动 → 标记未同步 + 重新计算表计 ID"""
         self._set_device_synced(False)
+        self._recompute_meter_ids()
+
+    def _recompute_meter_ids(self):
+        """根据 厂商代码/版本标签/版本号/产品序列号 重新计算表计ID（H）和表计ID（D）
+
+        编码规则（与 ID.txt 参考一致）：
+          6 字节 = [厂商代码 2B] [版本标签 5bit + 版本号高 3bit]
+                   [版本号低 3bit + 序列号高 5bit] [序列号中 8bit] [序列号低 8bit]
+
+          版本标签：a=1, b=2, ... z=26（5 bit）
+          版本号：1~10（6 bit，跨 2 字节）
+          产品序列号：21 bit（最大 0x1FFFFF = 2097151）
+
+          表计ID（H）= 6 字节用 "-" 连接的大写 hex
+          表计ID（D）= 厂商十进制(5位)-标签字母-版本号(2位)-序列号(7位)
+        """
+        # 1) 厂商代码（hex 字符串 → int）
+        vendor_text = self.f_vendor.text().strip()
+        try:
+            vendor_code = int(vendor_text, 16)
+        except ValueError:
+            return  # 厂商代码不合法，暂不更新
+        if vendor_code < 0 or vendor_code > 0xFFFF:
+            return
+
+        # 2) 版本标签（combo index 0='a' → 编码值 1）
+        ver_label_value = self.f_ver_label.currentIndex() + 1  # 1 ~ 26
+
+        # 3) 版本号（combo 文本 "01" ~ "10" → int）
+        try:
+            ver_num = int(self.f_ver_num.currentText())
+        except ValueError:
+            return
+
+        # 4) 产品序列号（SpinBox 值）
+        serial = self.f_serial.value()
+
+        # 5) 编码成 6 字节
+        b0 = (vendor_code >> 8) & 0xFF
+        b1 = vendor_code & 0xFF
+        b2 = ((ver_label_value << 3) & 0xF8) | ((ver_num >> 3) & 0x07)
+        b3 = ((ver_num << 5) & 0xE0) | ((serial >> 16) & 0x1F)
+        b4 = (serial >> 8) & 0xFF
+        b5 = serial & 0xFF
+
+        # 6) 表计ID（H）：6 字节 hex，用 "-" 连接
+        meter_id_h = f"{b0:02X}{b1:02X}{b2:02X}{b3:02X}{b4:02X}{b5:02X}"
+
+        # 7) 表计ID（D）：厂商十进制-标签字母-版本号-序列号
+        ver_label_char = chr(ver_label_value + 96)  # 1→'a', 2→'b', ...
+        meter_id_d = (f"{vendor_code:05d}-{ver_label_char}"
+                      f"-{ver_num:02d}-{serial:07d}")
+
+        # 8) 填充（屏蔽信号，避免触发 textChanged → 未同步 循环）
+        self.f_meter_id_h.blockSignals(True)
+        self.f_meter_id_d.blockSignals(True)
+        self.f_meter_id_h.setText(meter_id_h)
+        self.f_meter_id_d.setText(meter_id_d)
+        self.f_meter_id_h.blockSignals(False)
+        self.f_meter_id_d.blockSignals(False)
+
+    @staticmethod
+    def _parse_meter_id_bytes(data: list[int]) -> dict:
+        """把响应中 6 字节的表计ID数据解析成各字段
+
+        返回：
+          vendor_hex:  str   厂商代码（大写 hex，如 "C1C4"）
+          vendor_code: int   厂商代码（十进制整数）
+          ver_label:   str   版本标签（小写字母 'a' ~ 'z'）
+          ver_num:     str   版本号（2 位字符串，如 "01"）
+          serial:      int   产品序列号
+          meter_id_d:  str   十进制ID（"xxxxx-x-xx-xxxxxxx" 格式）
+        """
+        vendor_code = (data[0] << 8) | data[1]
+        vendor_hex = f"{data[0]:02X}{data[1]:02X}"
+
+        b2 = data[2] & 0xFF
+        ver_label_value = b2 >> 3               # 1 ~ 26
+        ver_label_char = chr(ver_label_value + 96)  # 1→'a', 2→'b', ...
+
+        ver_num = ((b2 & 0x07) << 3) | ((data[3] & 0xFF) >> 5)
+        ver_num_str = f"{ver_num:02d}"
+
+        serial = ((data[3] & 0x1F) << 16) | ((data[4] & 0xFF) << 8) | (data[5] & 0xFF)
+
+        meter_id_d = (f"{vendor_code:05d}-{ver_label_char}"
+                      f"-{ver_num_str}-{serial:07d}")
+
+        return {
+            "vendor_hex": vendor_hex,
+            "vendor_code": vendor_code,
+            "ver_label": ver_label_char,
+            "ver_num": ver_num_str,
+            "serial": serial,
+            "meter_id_d": meter_id_d,
+        }
 
     def _set_device_fields(self, *, model: str, vendor: str,
                            ver_label: str, ver_num: str, serial: int):
-        """程序填充设备信息字段（屏蔽信号，避免误触发未同步）"""
+        """程序填充设备信息字段（屏蔽信号，避免误触发未同步）
+
+        参数：
+          model:     设备型号字符串
+          vendor:    厂商代码（大写 hex，如 "C1C4"）
+          ver_label: 版本标签（小写字母 'a' ~ 'z'）
+          ver_num:   版本号（2 位字符串，如 "01"）
+          serial:    产品序列号（int）
+        """
         line_widgets = [self.f_model, self.f_vendor]
         combos = [self.f_ver_label, self.f_ver_num]
         for w in line_widgets:
@@ -819,16 +967,16 @@ class GwConfigPage(QWidget):
         self.f_ver_label.setCurrentIndex(idx_label)
         idx_num = VERSION_NUMBERS.index(ver_num) if ver_num in VERSION_NUMBERS else 0
         self.f_ver_num.setCurrentIndex(idx_num)
-        self.f_serial.setText(str(max(SERIAL_MIN, min(SERIAL_MAX, serial))))
-        # 表计 ID（H/D）只读，按序列号派生展示
-        self.f_meter_id_h.setText(f"{serial:X}")
-        self.f_meter_id_d.setText(str(serial))
+        self.f_serial.setValue(max(SERIAL_MIN, min(SERIAL_MAX, serial)))
 
         for w in line_widgets:
             w.blockSignals(False)
         for c in combos:
             c.blockSignals(False)
         self.f_serial.blockSignals(False)
+
+        # 表计 ID（H/D）只读字段：根据所有字段重新计算
+        self._recompute_meter_ids()
 
     def _on_read_device(self):
         """从设备读取基本信息标识 → 回填表单
@@ -880,18 +1028,53 @@ class GwConfigPage(QWidget):
                 )
                 return
 
-            # 回填表单
-            self.f_model.blockSignals(True)
-            self.f_meter_id_h.blockSignals(True)
-            self.f_sensor_type.blockSignals(True)
+            # 把表计 ID 的 hex 字符串解析回 6 字节 → 提取各字段
+            meter_id_hex = parsed["meter_id_h"]  # 12 个 hex 字符 = 6 字节
+            meter_id_bytes = [int(meter_id_hex[i:i + 2], 16)
+                              for i in range(0, len(meter_id_hex), 2)]
+            decoded = self._parse_meter_id_bytes(meter_id_bytes)
+
+            # 格式化后的表计ID（H）：6 字节 hex 用 "-" 连接
+            meter_id_h_fmt = (f"{meter_id_bytes[0]:02X}{meter_id_bytes[1]:02X}"
+                              f"{meter_id_bytes[2]:02X}{meter_id_bytes[3]:02X}"
+                              f"{meter_id_bytes[4]:02X}{meter_id_bytes[5]:02X}")
+
+            # 回填表单（屏蔽信号，避免误触发「未同步」）
+            line_widgets = [self.f_model, self.f_vendor,
+                            self.f_meter_id_h, self.f_meter_id_d,
+                            self.f_sensor_type]
+            combo_widgets = [self.f_ver_label, self.f_ver_num]
+            for w in line_widgets:
+                w.blockSignals(True)
+            for c in combo_widgets:
+                c.blockSignals(True)
+            self.f_serial.blockSignals(True)
             try:
                 self.f_model.setText(parsed["model"])
-                self.f_meter_id_h.setText(parsed["meter_id_h"])
+                self.f_vendor.setText(decoded["vendor_hex"])
+                # 版本标签：decoded["ver_label"] = 'a' ~ 'z'
+                vl = decoded["ver_label"]
+                idx_label = (VERSION_LABELS.index(vl)
+                             if vl in VERSION_LABELS else 0)
+                self.f_ver_label.setCurrentIndex(idx_label)
+                # 版本号："01" ~ "10"
+                vn = decoded["ver_num"]
+                idx_num = (VERSION_NUMBERS.index(vn)
+                           if vn in VERSION_NUMBERS else 0)
+                self.f_ver_num.setCurrentIndex(idx_num)
+                # 产品序列号（SpinBox）
+                self.f_serial.setValue(max(SERIAL_MIN,
+                                           min(SERIAL_MAX, decoded["serial"])))
+                # 表计 ID（H / D）只读字段
+                self.f_meter_id_h.setText(meter_id_h_fmt)
+                self.f_meter_id_d.setText(decoded["meter_id_d"])
                 self.f_sensor_type.setText(parsed["sensor_type"])
             finally:
-                self.f_model.blockSignals(False)
-                self.f_meter_id_h.blockSignals(False)
-                self.f_sensor_type.blockSignals(False)
+                for w in line_widgets:
+                    w.blockSignals(False)
+                for c in combo_widgets:
+                    c.blockSignals(False)
+                self.f_serial.blockSignals(False)
 
             self._set_device_synced(True)
 
@@ -904,31 +1087,64 @@ class GwConfigPage(QWidget):
                 f"响应：{hex_resp}\n\n"
                 f"解析结果：\n"
                 f"  设备型号：{parsed['model']}\n"
-                f"  表计 ID（H）：{parsed['meter_id_h']}\n"
+                f"  厂商代码：{decoded['vendor_hex']}\n"
+                f"  版本标签：{decoded['ver_label']}\n"
+                f"  版本号：{decoded['ver_num']}\n"
+                f"  产品序列号：{decoded['serial']}\n"
+                f"  表计 ID（H）：{meter_id_h_fmt}\n"
+                f"  表计 ID（D）：{decoded['meter_id_d']}\n"
                 f"  传感器类型：{parsed['sensor_type']}"
             )
         except Exception as e:
             QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
 
-    def _on_write_device(self):
-        """把设备基本信息标识写入设备"""
-        model = self.f_model.text().strip()
-        vendor = self.f_vendor.text().strip()
-        ver_label = self.f_ver_label.currentText()
-        ver_num = self.f_ver_num.currentText()
-        try:
-            serial = int(self.f_serial.text().strip())
-        except ValueError:
-            QMessageBox.warning(self, "写入失败", "产品序列号必须是数字")
-            return
+    # 设备基本信息写入步骤顺序：表计ID → 设备型号
+    # 每步等待设备回包后再发下一步，全部成功提示"写入成功"，任一失败提示"写入失败"
+    _DEV_WRITE_STEPS = ("meter_id", "model")
+    _DEV_STEP_LABELS = {
+        "meter_id": "表计ID",
+        "model":    "设备型号",
+    }
 
-        if serial < SERIAL_MIN:
+    def _on_write_device(self):
+        """把设备基本信息标识分步写入设备
+
+        协议（非标准 Modbus，FC=0x10）：分 2 步串行下发（每步等设备回包再下一步）：
+          1) 表计ID    <slave> 10 07 D0 00 03 06 <6字节meter_id>  <CRC>
+          2) 设备型号  <slave> 10 07 DC 00 08 10 <16字节ASCII>    <CRC>
+        """
+        # 1) 从机地址：顶卡「表计通讯地址」= 设备当前地址
+        slave = self._parse_addr(self.f_meter_addr.text())
+        if slave is None:
             QMessageBox.warning(
                 self, "写入失败",
-                f"产品序列号不能小于 {SERIAL_MIN}"
+                "顶部「表计通讯地址」必须为 1 ~ 247 之间的整数\n"
+                "（该值是发送 modbus 帧时使用的从机地址，需与设备当前地址一致）"
             )
             return
 
+        # 2) 收集字段
+        model = self.f_model.text().strip()
+        meter_id_h = self.f_meter_id_h.text().strip()
+        vendor = self.f_vendor.text().strip()
+        ver_label = self.f_ver_label.currentText()
+        ver_num = self.f_ver_num.currentText()
+        serial = self.f_serial.value()
+
+        if not meter_id_h:
+            QMessageBox.warning(
+                self, "写入失败",
+                "表计ID（H）为空，请先填写厂商代码/版本标签/版本号/产品序列号"
+            )
+            return
+        if not model:
+            QMessageBox.warning(
+                self, "写入失败",
+                "设备型号不能为空"
+            )
+            return
+
+        # 3) 串口未连接：演示模式，仅展示待写入值
         if not serial_manager.is_connected:
             QMessageBox.warning(
                 self, "写入失败",
@@ -940,38 +1156,128 @@ class GwConfigPage(QWidget):
                 f"厂商代码：{vendor}\n"
                 f"版本标签：{ver_label}\n"
                 f"版本号：{ver_num}\n"
-                f"产品序列号：{serial}"
+                f"产品序列号：{serial}\n"
+                f"表计ID（H）：{meter_id_h}"
             )
             return
 
-        try:
-            self.btn_dev_write.setText("写入中...")
-            self.btn_dev_write.setEnabled(False)
-            QTimer.singleShot(
-                600,
-                lambda: self._write_device_done(model, vendor, ver_label, ver_num, serial),
-            )
-        except Exception as e:
-            self.btn_dev_write.setText("写入")
-            self.btn_dev_write.setEnabled(True)
-            QMessageBox.warning(self, "写入失败", f"写入异常：{e}")
+        # 4) 初始化分步写入状态机
+        self._dev_write_slave = slave
+        self._dev_write_meter_id = meter_id_h
+        self._dev_write_model = model
+        self._dev_write_step_index = 0
+        self._dev_write_results: list[dict] = []
+        self._dev_write_busy = True
 
-    def _write_device_done(self, model, vendor, ver_label, ver_num, serial):
-        """设备信息写入完成回调"""
+        self.btn_dev_write.setText("写入中...")
+        self.btn_dev_write.setEnabled(False)
+        self._do_device_write_step()
+
+    def _do_device_write_step(self):
+        """执行当前设备信息写入步骤：发帧 → 等回包 → 下一步，全部成功后 _device_write_all_done。"""
+        if not self._dev_write_busy:
+            return
+        idx = self._dev_write_step_index
+        if idx >= len(self._DEV_WRITE_STEPS):
+            self._device_write_all_done()
+            return
+        step = self._DEV_WRITE_STEPS[idx]
+
+        try:
+            if step == "meter_id":
+                frame = build_gw_write_meter_id_frame(self._dev_write_slave, self._dev_write_meter_id)
+            elif step == "model":
+                frame = build_gw_write_device_model_frame(self._dev_write_slave, self._dev_write_model)
+            else:
+                raise ValueError(f"未知写入步骤：{step}")
+        except ValueError as e:
+            self._device_write_abort(f"参数非法：{e}", step, None, None)
+            return
+
+        # 发送并等待响应
+        try:
+            resp_bytes = serial_manager.transact(bytes(frame))
+        except Exception as e:
+            self._device_write_abort(f"串口异常：{e}", step, frame, None)
+            return
+
+        if not resp_bytes:
+            self._device_write_abort("设备无响应（超时）", step, frame, None)
+            return
+
+        resp = list(resp_bytes)
+        # 按步骤选择对应的解析函数
+        if step == "meter_id":
+            parsed = parse_gw_write_meter_id_response(resp)
+        else:
+            parsed = parse_gw_write_device_model_response(resp)
+        if parsed is None:
+            hex_resp = " ".join(f"{b:02X}" for b in resp)
+            self._device_write_abort(
+                f"回包校验失败（FC/CRC 不通过）：\n{hex_resp}",
+                step, frame, resp,
+            )
+            return
+
+        # 该步成功，记录回执
+        self._dev_write_results.append({
+            "step": step,
+            "label": self._DEV_STEP_LABELS[step],
+            "frame": frame,
+            "resp": resp,
+        })
+
+        # 下一步（让 UI 有机会刷新）
+        self._dev_write_step_index += 1
+        QTimer.singleShot(50, self._do_device_write_step)
+
+    def _device_write_abort(self, reason: str, step: str,
+                            frame: list[int] | None, resp: list[int] | None):
+        """某一步设备信息写入失败：终止状态机，恢复按钮，弹错误框"""
+        self._dev_write_busy = False
         self.btn_dev_write.setText("写入")
         self.btn_dev_write.setEnabled(True)
-        # 表计 ID（H/D）只读，写入成功后按序列号更新展示
-        self.f_meter_id_h.setText(f"{serial:X}")
-        self.f_meter_id_d.setText(str(serial))
+        self._set_device_synced(False)
+
+        lines = [
+            f"第 {self._dev_write_step_index + 1} 步"
+            f"「{self._DEV_STEP_LABELS[step]}」失败：{reason}"
+        ]
+        if frame is not None:
+            lines.append("请求：" + " ".join(f"{b:02X}" for b in frame))
+        if resp is not None:
+            lines.append("回包：" + " ".join(f"{b:02X}" for b in resp))
+        lines.append(
+            f"已完成 {len(self._dev_write_results)} / {len(self._DEV_WRITE_STEPS)} 步，"
+            f"后续步骤未执行。"
+        )
+        QMessageBox.warning(self, "写入失败", "\n".join(lines))
+
+    def _device_write_all_done(self):
+        """2 步设备信息全部写入成功：恢复按钮、更新状态、汇总展示"""
+        self._dev_write_busy = False
+        self.btn_dev_write.setText("写入")
+        self.btn_dev_write.setEnabled(True)
+        # 表计 ID（H/D）只读，写入成功后根据表单字段重新计算展示
+        self._recompute_meter_ids()
         self._set_device_synced(True)
+
+        # 汇总请求/响应（便于现场排错）
+        step_lines = []
+        for r in self._dev_write_results:
+            req_hex = " ".join(f"{b:02X}" for b in r["frame"])
+            resp_hex = " ".join(f"{b:02X}" for b in r["resp"])
+            step_lines.append(f"  [{r['label']}]")
+            step_lines.append(f"    请求：{req_hex}")
+            step_lines.append(f"    响应：{resp_hex}")
+
         QMessageBox.information(
             self, "写入成功",
-            f"设备基本信息标识已写入设备：\n"
-            f"  设备型号：{model}\n"
-            f"  厂商代码：{vendor}\n"
-            f"  版本标签：{ver_label}\n"
-            f"  版本号：{ver_num}\n"
-            f"  产品序列号：{serial}"
+            f"设备基本信息标识已分 {len(self._DEV_WRITE_STEPS)} 步写入设备"
+            f"（从机地址 {self._dev_write_slave}）：\n"
+            f"  表计ID：{self._dev_write_meter_id}\n"
+            f"  设备型号：{self._dev_write_model}\n"
+            f"\n报文流水：\n" + "\n".join(step_lines)
         )
 
     # ===== 读取 =====
@@ -1396,6 +1702,7 @@ class GwConfigPage(QWidget):
                 box.set_state("warn" if parsed.get(key, False) else "ok")
 
             self.sensor_state_tag.update_state("已采集", "ok")
+            self._update_sensor_time()
 
             # 汇总弹窗
             hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
@@ -1435,6 +1742,7 @@ class GwConfigPage(QWidget):
             self.btn_auto_sensor.setText("自动采集")
             self._sensor_timer.stop()
             self.sensor_state_tag.update_state("已停止", "warn")
+            self._clear_sensor_time()
 
     def _on_sensor_tick(self):
         """每轮采集：从设备读取传感器状态（10 个状态位）"""
@@ -1497,6 +1805,7 @@ class GwConfigPage(QWidget):
                 box.set_state("warn" if parsed.get(key, False) else "ok")
 
             self.sensor_state_tag.update_state("已采集", "ok")
+            self._update_sensor_time()
         except Exception:
             # 自动采集时异常不弹窗，仅更新状态
             self.sensor_state_tag.update_state("未采集", "warn")
@@ -1579,6 +1888,7 @@ class GwConfigPage(QWidget):
                     self._realtime_metrics[name].set_value(None, False)
 
             self.realtime_state_tag.update_state("已采集", "ok")
+            self._update_realtime_time()
 
             hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
             field_labels = {
@@ -1618,6 +1928,7 @@ class GwConfigPage(QWidget):
             self.btn_auto_realtime.setText("自动采集")
             self._realtime_timer.stop()
             self.realtime_state_tag.update_state("已停止", "warn")
+            self._clear_realtime_time()
 
     def _on_realtime_tick(self):
         """每轮采集：从设备读取 4 路温度压力密度数据（无弹窗，静默更新）"""
@@ -1669,6 +1980,7 @@ class GwConfigPage(QWidget):
                     self._realtime_metrics[name].set_value(None, False)
 
             self.realtime_state_tag.update_state("采集中", "ok")
+            self._update_realtime_time()
         except Exception:
             # 自动采集时异常不弹窗，仅更新状态
             self.realtime_state_tag.update_state("未采集", "warn")
