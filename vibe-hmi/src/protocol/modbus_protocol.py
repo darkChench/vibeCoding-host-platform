@@ -176,6 +176,7 @@ def parse_gw_read_response(resp: list[int]) -> dict | None:
     }
 
 
+
 # 国网协议（表计通信标识）写命令
 # 帧结构：<slave> 66 <byteCount> <5字节头> <数据> <CRC_LO> <CRC_HI>
 # 5 字节头格式：02 20 <sub_id> <fmt> <len>
@@ -774,6 +775,120 @@ def parse_gw_dev_info_response(resp: list[int]) -> dict | None:
         return None
 
     return result
+
+
+# 国网协议（设备基本信息标识）写入
+# 写表计ID（H）：
+#   <slave> 10 07 D0 00 03 06 <6字节meter_id> <CRC_LO CRC_HI>
+#   数据长度 0x06 = 6 字节（表计ID 6字节）
+# 写设备型号：
+#   <slave> 10 07 DC 00 08 10 <16字节ASCII> <CRC_LO CRC_HI>
+#   数据长度 0x10 = 16 字节（设备型号 ASCII，不足补 0x00）
+
+
+def build_gw_write_meter_id_frame(slave_id: int, meter_id_h: str) -> list[int]:
+    """生成国网协议「写入表计ID（H）」请求帧。
+
+    帧结构：<slave> 10 07 D0 00 03 06 <6字节meter_id> <CRC_LO CRC_HI>
+
+    参数：
+        slave_id:  从机地址（1~247）
+        meter_id_h: 表计ID（H）大写 hex 字符串，如 "C1C4082927C1"（12 个字符 = 6 字节）
+
+    例：slave=1, meter_id="C1C4082927C1" →
+        01 10 07 D0 00 03 06 C1 C4 08 29 27 C1 <CRC>
+    """
+    if not (1 <= slave_id <= 247):
+        raise ValueError(f"从机地址必须 1~247，得到 {slave_id}")
+    # meter_id_h 应为 12 个 hex 字符（6 字节）
+    clean = meter_id_h.strip().upper()
+    if len(clean) != 12:
+        raise ValueError(f"表计ID（H）必须为 12 个 hex 字符（6 字节），得到 {len(clean)} 个字符")
+    try:
+        meter_bytes = [int(clean[i:i + 2], 16) for i in range(0, 12, 2)]
+    except ValueError:
+        raise ValueError(f"表计ID（H）包含非法 hex 字符：{clean}")
+
+    # 帧结构：<slave> 10 07 D0 00 03 06 <data×6>
+    frame = [
+        slave_id & 0xFF,
+        0x10, 0x07,           # 写命令标识
+        0xD0, 0x00,           # 寄存器地址
+        0x03, 0x06,           # 寄存器数量(3) / 字节数(6)
+    ] + meter_bytes
+    return append_crc(frame)
+
+
+def parse_gw_write_meter_id_response(resp: list[int]) -> dict | None:
+    """解析「写入表计ID（H）」响应。
+
+    响应按"回显请求"约定：设备收到合法写命令后原样回传，
+    上层按 CRC + FC 判定成功与否。
+
+    返回：
+        ok: True 表示回包 CRC 通过
+        echo: 回包原始字节列表
+    失败返回 None。
+    """
+    if len(resp) < 5:
+        return None
+    # 回包第 1 字节应为 0x10（与请求一致）
+    if resp[1] != 0x10:
+        return None
+    if not verify_crc(resp):
+        return None
+    return {"ok": True, "echo": resp}
+
+
+def build_gw_write_device_model_frame(slave_id: int, model: str) -> list[int]:
+    """生成国网协议「写入设备型号」请求帧。
+
+    帧结构：<slave> 10 07 DC 00 08 10 <16字节ASCII> <CRC_LO CRC_HI>
+
+    参数：
+        slave_id: 从机地址（1~247）
+        model:    设备型号字符串，转 ASCII 后补 0x00 至 16 字节
+
+    设备型号编码：每个字符取 ASCII 码值，不足 16 字节用 0x00 补齐。
+    例：slave=1, model="R1.5G 1.1.52601"（16 字符）→
+        01 10 07 DC 00 08 10 52 31 2E 35 47 20 31 2E 31 2E 35 32 36 30 31 00 <CRC>
+    """
+    if not (1 <= slave_id <= 247):
+        raise ValueError(f"从机地址必须 1~247，得到 {slave_id}")
+
+    # 设备型号 → 16 字节 ASCII（不足补 0x00）
+    model_bytes = model.encode("ascii", errors="replace")[:16]
+    # 补零到 16 字节
+    model_data = list(model_bytes) + [0x00] * (16 - len(model_bytes))
+
+    # 帧结构：<slave> 10 07 DC 00 08 10 <data×16>
+    frame = [
+        slave_id & 0xFF,
+        0x10, 0x07,           # 写命令标识
+        0xDC, 0x00,           # 寄存器地址
+        0x08, 0x10,           # 寄存器数量(8) / 字节数(16)
+    ] + model_data
+    return append_crc(frame)
+
+
+def parse_gw_write_device_model_response(resp: list[int]) -> dict | None:
+    """解析「写入设备型号」响应。
+
+    响应按"回显请求"约定：设备收到合法写命令后原样回传，
+    上层按 CRC + FC 判定成功与否。
+
+    返回：
+        ok: True 表示回包 CRC 通过
+        echo: 回包原始字节列表
+    失败返回 None。
+    """
+    if len(resp) < 5:
+        return None
+    if resp[1] != 0x10:
+        return None
+    if not verify_crc(resp):
+        return None
+    return {"ok": True, "echo": resp}
 
 
 def simulate_read_response(frame: list[int], param: dict) -> dict:

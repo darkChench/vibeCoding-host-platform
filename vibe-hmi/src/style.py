@@ -201,6 +201,20 @@ def build_qss() -> str:
     QDateTimeEdit:focus, QDateEdit:focus {{
         border-color: {c["PRIMARY"]};
     }}
+    /* QSpinBox：与 QLineEdit 同款边框/圆角；up-button / down-button 保留系统原生 */
+    QSpinBox {{
+        min-height: {theme.CONTROL_H}px;
+        padding: 0 9px;
+        border: 1px solid {c["LINE_DARK"]};
+        border-radius: {r["sm"]}px;
+        background: #ffffff;
+        color: {c["TEXT"]};
+        font-size: {theme.FS_MD}pt;
+        font-weight: {theme.FW_BOLD};
+    }}
+    QSpinBox:focus {{
+        border-color: {c["PRIMARY"]};
+    }}
     /* 不定制 QDateTimeEdit 的按钮/箭头 subcontrol——原生上下按钮由
        PopupDateTimeEdit 用 NoButtons 隐藏，右侧叠加 ▾ 提示（代码实现） */
     /* 日历弹窗（CalendarPopup）的全部样式在 history_page.py 的实例级
