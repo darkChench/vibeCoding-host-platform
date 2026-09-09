@@ -228,6 +228,7 @@ class GwConfigPage(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
+
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -239,6 +240,7 @@ class GwConfigPage(QWidget):
         layout.addWidget(self._build_realtime_data_card())
         layout.addWidget(self._build_threshold_card())
         layout.addStretch()  # 底部留白，卡片按内容高度紧凑排列
+
 
         scroll.setWidget(content)
         outer = QVBoxLayout(self)

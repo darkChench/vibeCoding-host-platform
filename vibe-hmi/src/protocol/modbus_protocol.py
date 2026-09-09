@@ -176,6 +176,7 @@ def parse_gw_read_response(resp: list[int]) -> dict | None:
     }
 
 
+
 # 国网协议（表计通信标识）写命令
 # 帧结构：<slave> 66 <byteCount> <5字节头> <数据> <CRC_LO> <CRC_HI>
 # 5 字节头格式：02 20 <sub_id> <fmt> <len>
