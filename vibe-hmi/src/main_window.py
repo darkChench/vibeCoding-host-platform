@@ -295,13 +295,13 @@ class MainWindow(QMainWindow):
     def _update_stats(self):
         """定时刷新状态行 RX/TX/CRC/丢包率 统计。
 
-        丢包率用累计失败次数 / 累计请求次数（tx_failures / tx_frames），
-        是单调累计的，不会因后续成功收发而回退或归零。
+        丢包率用本次连接的失败次数 / 请求次数（tx_failures / tx_frames）：
+        新建连接清零，连接期间单调累计，不因后续成功收发而回退。
         """
         stats = serial_manager.get_stats()
         self.lbl_rx.setText(f'RX {stats["rx_bytes"]:,} B')
         self.lbl_tx.setText(f'TX {stats["tx_bytes"]:,} B')
-        # 丢包率：累计失败次数 / 累计请求次数（timeout + crc_error 计入失败）
+        # 丢包率：本次连接失败次数 / 请求次数（timeout + crc_error 计入失败）
         tx_frames = stats["tx_frames"]
         failures = stats["tx_failures"]
         loss_rate = f"{failures / tx_frames * 100:.1f}%" if tx_frames > 0 else "0%"

@@ -77,13 +77,13 @@ class SerialManager(QObject):
         # 串口访问互斥锁：ReadThread 后台读 与 transact() 请求-响应 必须互斥
         # 否则 ReadThread 会抢在 transact 之前把响应帧从 buffer 里读走
         self._serial_lock = threading.Lock()
-        # 统计
+        # 统计（每次新建连接时清零，按连接会话统计）
         self.tx_bytes = 0
         self.rx_bytes = 0
-        self.tx_frames = 0       # 累计发送帧数（= 请求次数）
-        self.rx_frames = 0       # 累计接收帧数
-        self.crc_errors = 0      # 累计 CRC 错误数
-        self.tx_failures = 0     # 累计请求失败次数（timeout + crc_error + 无响应），用于稳定的丢包率
+        self.tx_frames = 0       # 本次连接发送帧数（= 请求次数）
+        self.rx_frames = 0       # 本次连接接收帧数
+        self.crc_errors = 0      # 本次连接 CRC 错误数
+        self.tx_failures = 0     # 本次连接请求失败次数（timeout + crc_error + 无响应），用于稳定的丢包率
 
     # ===== 连接管理 =====
 
@@ -117,6 +117,9 @@ class SerialManager(QObject):
             )
             self._is_mock = False
             self._is_connected = True
+            # 新连接 = 新统计会话：丢包率等计数清零，不跨连接累计
+            # （放在成功路径：连接失败时保留上次会话数据供查看）
+            self.reset_stats()
             self.connection_changed.emit(True)
             # 启动后台读线程（与 transact 用同一把锁互斥访问串口）
             self._reader = ReadThread(self._serial, self._serial_lock)
@@ -404,7 +407,7 @@ class SerialManager(QObject):
         }
 
     def reset_stats(self):
-        """重置统计"""
+        """重置统计（connect 成功时自动调用，开始新的统计会话）"""
         self.tx_bytes = 0
         self.rx_bytes = 0
         self.tx_frames = 0

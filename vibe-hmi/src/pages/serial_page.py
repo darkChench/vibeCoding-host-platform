@@ -690,19 +690,19 @@ class SerialPage(QWidget):
     def _refresh_stats(self):
         """刷新统计 tab 内容。
 
-        丢包率用累计失败次数 / 累计请求次数，单调累计不会回退。
+        统计按连接会话计：新建连接清零，连接期间丢包率单调累计不回退。
         """
         self._lines["stats"] = []
         stats = serial_manager.get_stats()
-        # 丢包率：累计请求失败次数 / 累计请求次数（timeout + crc_error 计入失败）
+        # 丢包率：本次连接失败次数 / 请求次数（timeout + crc_error 计入失败）
         tx_frames = stats["tx_frames"]
         failures = stats["tx_failures"]
         loss_rate = f"{failures / tx_frames * 100:.1f}%" if tx_frames > 0 else "0%"
         rows = [
             ["tx", "TX", f'{stats["tx_bytes"]:,} B / {tx_frames} 帧'],
             ["rx", "RX", f'{stats["rx_bytes"]:,} B / {stats["rx_frames"]} 帧'],
-            ["tx", "丢包", f'{failures} 次 / {loss_rate}（累计失败/总请求）'],
-            ["rx", "CRC", f'{stats["crc_errors"]} 次（累计）'],
+            ["tx", "丢包", f'{failures} 次 / {loss_rate}（本次连接 失败/总请求）'],
+            ["rx", "CRC", f'{stats["crc_errors"]} 次（本次连接）'],
         ]
         self._lines["stats"] = rows
         self._refresh_terminal()
