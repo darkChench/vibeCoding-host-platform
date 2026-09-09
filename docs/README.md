@@ -6,7 +6,7 @@
 
 ## 目录结构
 
-```
+```text
 docs/
 ├── README.md              # 本文件
 ├── AGENTS.md              # docs 目录的 AI Agent 操作手册

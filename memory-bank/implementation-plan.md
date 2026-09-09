@@ -1,7 +1,7 @@
 # 实施计划（memory-bank）
 
 > 本文件是 multi-protocol-hmi 从原型到 PySide6 产品的实施路线与任务拆解。
-> 更新时间：2026-07-27。
+> 更新时间：2026-08-19。
 
 ## 1. 总体路线
 
@@ -11,7 +11,7 @@
 阶段 2（已完成）：逐页迁移（12 个页面全部实现）
 阶段 3（已完成）：协议层接入真实 pyserial（Modbus RTU + 模拟回退）
 阶段 4（已完成）：AI 助手接入真实 LLM（OpenAI/Anthropic 兼容）
-阶段 5（待实现）：打包发布
+阶段 5（已完成）：打包发布（PyInstaller onedir，build.bat 一键打包）
 ```
 
 ## 2. 当前里程碑
@@ -25,7 +25,7 @@
 | M4 AI 助手落地 | 真实 LLM function calling（5 工具） | ✅ 完成 |
 | M5 多设备架构 | 每设备独立参数表 + 设备管理 | ✅ 完成 |
 | M6 历史数据 | SQLite + 查询 + QtCharts + CSV 导出 | ✅ 完成 |
-| M7 打包发布 | PyInstaller 打 exe | ⬜ 待实现 |
+| M7 打包发布 | PyInstaller 打 exe | ✅ 完成 |
 
 ## 3. 阶段 1：PySide6 工程骨架（已完成）
 
@@ -34,7 +34,7 @@
 ```text
 vibe-hmi/
 ├── main.py                       # 入口
-├── config/                       # 运行时配置（params/devices/policy/model_config/history）
+├── config/                       # 运行时配置（params/devices/policy/model_config/send_history）
 ├── save/                         # SQLite 历史数据库
 ├── history/                      # 串口日志
 ├── assets/icons/                 # SVG 图标
@@ -47,7 +47,8 @@ vibe-hmi/
 │   ├── sidebar.py                # 侧边栏导航
 │   ├── main_area.py              # 主区（tabs + QStackedWidget）
 │   ├── main_window.py            # 主窗口（菜单栏/工具栏/状态栏）
-│   ├── history_db.py             # SQLite 历史数据库
+│   ├── paths.py                  # 路径解析（开发/打包双模式）
+│   ├── history_db.py             # SQLite 历史数据库（采样 + 报警）
 │   ├── protocol/modbus_protocol.py  # Modbus RTU 协议层
 │   ├── serial/serial_manager.py    # pyserial 串口管理器
 │   ├── workers/poll_worker.py      # 后台轮询线程
@@ -86,17 +87,17 @@ vibe-hmi/
 ## 6. 阶段 4：AI 助手落地（已完成）
 
 - OpenAI 兼容 + Anthropic 兼容（智谱 GLM）
-- 5 个工具：read_sensor / read_all_sensors / get_alarms / get_trend / get_device_status
+- 6 个工具：read_sensor / read_all_sensors / get_alarms / get_trend / get_device_status / query_history
 - 后台线程调 LLM（QThread）
 - Markdown 渲染助手回复
 
-## 7. 阶段 7：打包发布（待实现）
+## 7. 阶段 5：打包发布（已完成）
 
-```bash
-pyinstaller --onefile --windowed --name multi-protocol-hmi main.py
-```
+- 一键打包：`build.bat`（PyInstaller onedir 模式，配置见 `vibe-hmi.spec`）
+- 产物：`dist/vibe-hmi/vibe-hmi.exe`（约 320 MB），拷贝整个目录到目标机双击即可运行
+- 用户数据目录（config/、save/、history/）在 exe 同级自动创建
 
-验收：在目标 Windows 机器双击 exe 可运行，无需 Python 环境。
+验收：在目标 Windows 机器双击 exe 可运行，无需 Python 环境。✅ 已通过。
 
 ## 8. 已解决的风险
 
@@ -105,4 +106,4 @@ pyinstaller --onefile --windowed --name multi-protocol-hmi main.py
 | temperature 负值问题 | ✅ 已解决 | 协议层支持 int16/float32 负值 |
 | float32 字节序 | ✅ 已解决 | Big-Endian 实现 + 长度容错 |
 | LLM 云 API 现场可用性 | ✅ 已解决 | 智谱/DeepSeek/OpenAI 三套接口支持 |
-| 工控机无 Python 环境 | ⬜ 待打包 | PyInstaller 打包（阶段 7） |
+| 工控机无 Python 环境 | ✅ 已解决 | PyInstaller onedir 打包（build.bat） |

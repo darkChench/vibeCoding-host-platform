@@ -612,7 +612,8 @@
 禁止任何“看起来高级但未经复杂度分析、资源评估、瓶颈定位、基准测试、正确性回归验证”的 Python 性能优化。
 ```
 
-不是全部。上面那套已经覆盖了**常规 Python 业务代码 / Web 服务 / 数据处理 / IO / 数据库 / async** 的大部分性能反例，但还没有覆盖完整的 **Python 高性能计算 HPC / 数值计算 / 大规模数据处理 / GPU / 多进程 / 分布式计算** 维度。
+不是全部。上面那套已经覆盖了**常规 Python 业务代码 / Web 服务 / 数据处理 / IO / 数据库 / async** 的大部分性能反例，
+但还没有覆盖完整的 **Python 高性能计算 HPC / 数值计算 / 大规模数据处理 / GPU / 多进程 / 分布式计算** 维度。
 
 如果你的目标是「Python 高性能计算全局禁止池」，还需要补这些。
 
@@ -1408,7 +1409,8 @@ pip install -r requirements.txt
 <details open>
 <summary><strong>📦 Node.js 环境相关</strong>（点击展开/收起）</summary>
 
-> 本节是通用 Web / Node.js 项目的排障示例，不代表本仓根目录需要保留 `package.json`、`package-lock.json` 或 `node_modules/`。本仓根目录当前使用 `npx --yes markdownlint-cli@0.48.0` 执行 Markdown lint，不提交本地 Node 依赖目录。
+> 本节是通用 Web / Node.js 项目的排障示例，不代表本仓根目录需要保留 `package.json`、`package-lock.json` 或 `node_modules/`。
+> 本仓根目录当前使用 `npx --yes markdownlint-cli@0.48.0` 执行 Markdown lint，不提交本地 Node 依赖目录。
 
 ###### 常见问题
 
@@ -1739,7 +1741,7 @@ git stash pop
 
 实在搞不定？试试这个提示词：
 
-```
+```text
 我遇到了一个问题，已经尝试了很多方法都没解决。
 
 错误信息：
