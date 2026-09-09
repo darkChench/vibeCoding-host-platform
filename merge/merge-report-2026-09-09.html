@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git 冲突合并报告 - 2026-09-09</title>
+<style>
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; margin: 0; background: #f5f7fa; color: #2d3748; }
+  .container { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 22px; border-bottom: 3px solid #4299e1; padding-bottom: 8px; }
+  h2 { font-size: 17px; margin-top: 28px; color: #2b6cb0; }
+  .card { background: #fff; border-radius: 8px; padding: 16px 20px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+  .badge.ok { background: #c6f6d5; color: #22543d; }
+  .badge.none { background: #e2e8f0; color: #4a5568; }
+  .badge.info { background: #bee3f8; color: #2a4365; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+  th, td { border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #edf2f7; }
+  code { background: #edf2f7; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .meta { color: #718096; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Git 冲突合并报告</h1>
+  <p class="meta">生成时间：2026-09-09 18:02（本地时间） · 仓库：vibeCoding-host-platform · 分支：main</p>
+
+  <div class="card">
+    <h2 style="margin-top:0">总体结果</h2>
+    <p><span class="badge ok">合并成功</span> <span class="badge none">无冲突</span></p>
+    <ul>
+      <li>云端 Gitee 有 <b>3 个新提交</b>，已自动拉取并合并到本地 main（合并提交 <code>37c58a5</code>）。</li>
+      <li>双方改动文件<b>完全不重叠</b>，Git 采用 ort 策略自动合并，未产生任何冲突标记。</li>
+      <li>GitHub（origin）云端无更新，无需拉取。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">一、本地提交（待推送，1 个）</h2>
+    <table>
+      <tr><th>提交</th><th>说明</th><th>涉及文件</th></tr>
+      <tr>
+        <td><code>0844653</code></td>
+        <td>fix: serial - 统计改为按连接会话统计，新建连接自动清零 + 新增单测</td>
+        <td>
+          <code>vibe-hmi/src/serial/serial_manager.py</code><br>
+          <code>vibe-hmi/src/pages/serial_page.py</code><br>
+          <code>vibe-hmi/src/main_window.py</code><br>
+          <code>vibe-hmi/tests/test_serial_manager.py</code>（新增）
+        </td>
+      </tr>
+    </table>
+    <p class="meta">验证：pytest 2 个用例全部通过；make lint 通过。</p>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">二、云端拉取（Gitee，3 个提交）</h2>
+    <table>
+      <tr><th>提交</th><th>说明</th></tr>
+      <tr><td><code>7dc359c</code></td><td>国网协议数字化表计ID读写，传感器状态读取+温度压力密度读取+更新时间</td></tr>
+      <tr><td><code>b3d6773</code></td><td>Merge branch 'main' of gitee (云端历史合并提交)</td></tr>
+      <tr><td><code>81469d7</code></td><td>国网配置的设备基本标识读取写入；传感器状态，温度压力密度值自动采集+时间</td></tr>
+    </table>
+    <p><b>云端改动文件（493 行新增 / 50 行删除）：</b></p>
+    <ul>
+      <li><code>vibe-hmi/src/pages/gw_config_page.py</code>（+414 行改动）</li>
+      <li><code>vibe-hmi/src/protocol/modbus_protocol.py</code>（+115 行）</li>
+      <li><code>vibe-hmi/src/style.py</code>（+14 行）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">三、冲突分析</h2>
+    <table>
+      <tr><th>文件</th><th>状态</th><th>处理方式</th></tr>
+      <tr><td>serial_manager.py / serial_page.py / main_window.py</td><td><span class="badge info">仅本地修改</span></td><td>保留本地版本，无交叉</td></tr>
+      <tr><td>gw_config_page.py / modbus_protocol.py / style.py</td><td><span class="badge info">仅云端修改</span></td><td>保留云端版本，无交叉</td></tr>
+      <tr><td>test_serial_manager.py</td><td><span class="badge info">本地新增</span></td><td>直接纳入合并</td></tr>
+    </table>
+    <p class="meta">结论：无同文件双边改动，本次合并不存在需要人工裁决的冲突。</p>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">四、合并后操作</h2>
+    <ul>
+      <li>合并提交：<code>37c58a5</code> "Merge gitee/main: 国网表计ID读写 + 传感器状态/温度压力密度自动采集"</li>
+      <li>合并后验证：pytest 全部通过、make lint 通过。</li>
+      <li>推送目标：origin（GitHub）与 gitee 双远端同步推送 main。</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>
