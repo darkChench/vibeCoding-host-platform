@@ -117,6 +117,21 @@ class MainWindow(QMainWindow):
             if monitor_page and hasattr(monitor_page, "_refresh_device_combo"):
                 monitor_page._refresh_device_combo()
 
+    def _on_slave_id_changed(self, device_id: str, new_slave_id: int):
+        """国网配置页改址成功 → 刷新设备总览 + 设备管理表格 + sidebar 计数
+
+        复用 _sync_device_tags() 保证 sidebar "N 台" 同步；调用两页的
+        私有方法重建表格（device_page 已有 _refresh_table，overview_page
+        新增 refresh_device_table）。
+        """
+        self._sync_device_tags()
+        op = getattr(self, "overview_page", None)
+        if op and hasattr(op, "refresh_device_table"):
+            op.refresh_device_table()
+        dp = getattr(self, "device_page", None)
+        if dp and hasattr(dp, "_refresh_table"):
+            dp._refresh_table()
+
     def _sync_alarms_tag(self):
         """同步侧边栏"报警记录"标签为未确认报警数"""
         count = store.unack_count()
@@ -171,6 +186,7 @@ class MainWindow(QMainWindow):
         self._combo_port = self._make_tool_combo("串口", ports)
         controls.addWidget(self._combo_port["group"])
         self._combo_baud = self._make_tool_combo("波特率", ["115200", "57600", "9600", "4800", "2400"])
+        self._combo_baud["combo"].setCurrentText("9600")  # 默认 9600
         controls.addWidget(self._combo_baud["group"])
         self._combo_data = self._make_tool_combo("数据位", ["8 bit", "7 bit", "6 bit", "5 bit"])
         controls.addWidget(self._combo_data["group"])
@@ -378,6 +394,8 @@ class MainWindow(QMainWindow):
                         "ok" if synced else "warn",
                     )
                 )
+                # 从机地址变化 → 刷新设备总览 + 设备管理表格 + sidebar 计数
+                widget.slave_id_changed.connect(self._on_slave_id_changed)
             elif page.page_id == "settings":
                 widget = SettingsPage()
             elif page.page_id == "history":

@@ -22,6 +22,18 @@ from src.protocol.modbus_protocol import (
     simulate_read_response,
     parse_read_response,
     ModbusProtocol,
+    build_gw_write_addr_frame,
+    build_gw_write_baud_frame,
+    build_gw_write_parity_frame,
+    build_gw_write_datetime_frame,
+    GW_WRITE_HEADER_ADDR,
+    GW_WRITE_HEADER_BAUD,
+    GW_WRITE_HEADER_PARITY,
+    GW_WRITE_HEADER_DT,
+    GW_WRITE_SUB_ADDR,
+    GW_WRITE_SUB_BAUD,
+    GW_WRITE_SUB_PARITY,
+    GW_WRITE_SUB_DT,
 )
 
 
@@ -245,3 +257,80 @@ class TestModbusProtocol:
         for line in import_lines:
             assert "PySide6" not in line, f"协议层不应 import PySide6：{line}"
             assert "QtWidgets" not in line, f"协议层不应 import QtWidgets：{line}"
+
+
+# ========== 国网写帧 sub_id 钉死测试 ==========
+# 防止再次写错 sub_id：ADDR=0x01 / BAUD=0x02 / PARITY=0x03 / DT=0x04
+# 子项 ID 与头部常量必须一一对应。
+
+class TestGwWriteSubIds:
+    """子项 ID 与头部常量的一致性"""
+
+    def test_sub_id_constants(self):
+        assert GW_WRITE_SUB_ADDR == 0x01
+        assert GW_WRITE_SUB_BAUD == 0x02
+        assert GW_WRITE_SUB_PARITY == 0x03
+        assert GW_WRITE_SUB_DT == 0x04
+
+    def test_header_sub_id_matches_name(self):
+        # 头部第 3 字节（index 2）就是 sub_id
+        assert GW_WRITE_HEADER_ADDR[2] == GW_WRITE_SUB_ADDR
+        assert GW_WRITE_HEADER_BAUD[2] == GW_WRITE_SUB_BAUD
+        assert GW_WRITE_HEADER_PARITY[2] == GW_WRITE_SUB_PARITY
+        assert GW_WRITE_HEADER_DT[2] == GW_WRITE_SUB_DT
+
+
+class TestGwWriteFrames:
+    """国网协议写帧字节级断言（数据字节 + 头 sub_id）"""
+
+    def test_write_addr_sub_id_and_value(self):
+        # slave=2, addr=1 → 02 66 06 02 20 01 20 01 01 <CRC>
+        frame = build_gw_write_addr_frame(2, 1)
+        # 数据字节之前的部分：[slave, FC, byteCount, header[5]]
+        assert frame[:3] == [0x02, 0x66, 0x06]
+        assert frame[3:8] == GW_WRITE_HEADER_ADDR      # 子项 0x01
+        assert frame[8] == 0x01                        # 数据字节 = 地址 1
+        assert verify_crc(frame)
+
+    def test_write_baud_sub_id_and_value(self):
+        # slave=2, baud=9600(2) → 02 66 06 02 20 02 20 01 02 <CRC>
+        frame = build_gw_write_baud_frame(2, 2)
+        assert frame[:3] == [0x02, 0x66, 0x06]
+        assert frame[3:8] == GW_WRITE_HEADER_BAUD      # 子项 0x02
+        assert frame[8] == 0x02                        # 数据字节 = 9600
+        assert verify_crc(frame)
+
+    def test_write_parity_sub_id_and_value(self):
+        # slave=2, parity=0(无校验) → 02 66 06 02 20 03 20 01 00 <CRC>
+        frame = build_gw_write_parity_frame(2, 0)
+        assert frame[:3] == [0x02, 0x66, 0x06]
+        assert frame[3:8] == GW_WRITE_HEADER_PARITY    # 子项 0x03
+        assert frame[8] == 0x00                        # 数据字节 = 无校验
+        assert verify_crc(frame)
+
+    def test_write_datetime_sub_id_and_len(self):
+        # slave=2, 2021-07-29 15:33:58 →
+        #   02 66 0C 02 20 04 40 07 E5 07 07 1D 0F 21 3A 78 76
+        frame = build_gw_write_datetime_frame(2, 2021, 7, 29, 15, 33, 58)
+        assert frame[:3] == [0x02, 0x66, 0x0C]                 # byteCount = 0x0C
+        assert frame[3:8] == GW_WRITE_HEADER_DT                # 子项 0x04
+        # 数据 = 7 字节：年LE 月 日 时 分 秒
+        assert frame[8:15] == [0xE5, 0x07, 0x07, 0x1D, 0x0F, 0x21, 0x3A]
+        assert verify_crc(frame)
+
+    def test_parity_value_out_of_range(self):
+        """parity_code 必须在 0/1/2 之间"""
+        with pytest.raises(ValueError):
+            build_gw_write_parity_frame(2, 3)
+
+    def test_baud_value_out_of_range(self):
+        """baud_code 必须在 0/1/2/3 之间"""
+        with pytest.raises(ValueError):
+            build_gw_write_baud_frame(2, 4)
+
+    def test_addr_value_out_of_range(self):
+        """addr 必须在 1~247 之间"""
+        with pytest.raises(ValueError):
+            build_gw_write_addr_frame(2, 0)
+        with pytest.raises(ValueError):
+            build_gw_write_addr_frame(2, 248)

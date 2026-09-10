@@ -185,10 +185,10 @@ def parse_gw_read_response(resp: list[int]) -> dict | None:
 #   len:    01 = 1 字节数据, 07 = 7 字节数据（2 字节年 + 5 字节 MDHMS）
 # 单字节写：byteCount=0x06（5 头 + 1 数据），总帧 12 字节
 # 多字节写：byteCount=0x0C（5 头 + 7 数据），总帧 17 字节
-GW_WRITE_HEADER_ADDR   = [0x02, 0x20, 0x01, 0x20, 0x01]  # 通信地址
-GW_WRITE_HEADER_BAUD   = [0x02, 0x20, 0x02, 0x20, 0x01]  # 波特率
-GW_WRITE_HEADER_PARITY = [0x02, 0x20, 0x03, 0x20, 0x01]  # 奇偶校验位
-GW_WRITE_HEADER_DT     = [0x02, 0x20, 0x04, 0x40, 0x07]  # 日期时间
+GW_WRITE_HEADER_ADDR   = [0x02, 0x20, 0x01, 0x20, 0x01]  # 通信地址 (sub_id=0x01)
+GW_WRITE_HEADER_BAUD   = [0x02, 0x20, 0x02, 0x20, 0x01]  # 波特率   (sub_id=0x02)
+GW_WRITE_HEADER_PARITY = [0x02, 0x20, 0x03, 0x20, 0x01]  # 奇偶校验位 (sub_id=0x03)
+GW_WRITE_HEADER_DT     = [0x02, 0x20, 0x04, 0x40, 0x07]  # 日期时间 (sub_id=0x04)
 
 # 写命令子 ID（用于响应解析中识别）
 GW_WRITE_SUB_ADDR = 0x01
@@ -211,7 +211,7 @@ def _build_gw_write_frame(slave_id: int, header: list[int], data: list[int]) -> 
 def build_gw_write_baud_frame(slave_id: int, baud_code: int) -> list[int]:
     """国网协议：写波特率。
 
-    例：slave=2, baud=9600(2) → 02 66 06 02 20 02 20 01 02 F3 94
+    例：slave=2, baud=9600(2) → 02 66 06 02 20 02 20 01 02 <CRC>
     """
     if baud_code not in (0, 1, 2, 3):
         raise ValueError(f"baud_code 必须是 0/1/2/3，得到 {baud_code}")
@@ -221,7 +221,7 @@ def build_gw_write_baud_frame(slave_id: int, baud_code: int) -> list[int]:
 def build_gw_write_parity_frame(slave_id: int, parity_code: int) -> list[int]:
     """国网协议：写奇偶校验位。
 
-    例：slave=2, parity=0(无校验) → 02 66 06 02 20 03 20 01 00 73 A9
+    例：slave=2, parity=0(无校验) → 02 66 06 02 20 03 20 01 00 <CRC>
     """
     if parity_code not in (0, 1, 2):
         raise ValueError(f"parity_code 必须是 0/1/2，得到 {parity_code}")

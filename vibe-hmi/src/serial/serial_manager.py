@@ -162,6 +162,24 @@ class SerialManager(QObject):
         if was_connected:
             self.connection_changed.emit(False)
 
+    def set_baudrate(self, baudrate: int) -> bool:
+        """动态修改已连接串口的波特率（不重连）。
+
+        用于写入流程中设备波特率改变后，上位机同步切换波特率以继续通信。
+        返回是否成功。
+        """
+        if not self._is_connected or self._is_mock or not self._serial:
+            return False
+        try:
+            self._serial.baudrate = baudrate
+            # 切换波特率后清空收发缓冲区，避免残留数据干扰
+            self._serial.reset_input_buffer()
+            self._serial.reset_output_buffer()
+            return True
+        except Exception as e:
+            self.last_error = f"切换波特率失败：{e}"
+            return False
+
     def refresh_ports(self) -> list[str]:
         """枚举可用串口列表"""
         ports = serial.tools.list_ports.comports()

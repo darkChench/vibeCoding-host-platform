@@ -28,6 +28,7 @@ class OverviewPage(QWidget):
         super().__init__()
         self._metric_values: dict[str, QLabel] = {}  # label → value QLabel（供刷新）
         self._conn_tag: QLabel | None = None
+        self._device_count_tag: QLabel | None = None  # 设备列表卡头 "N 台" tag（供 refresh_device_table 更新）
         self._build_ui()
 
     def _build_ui(self):
@@ -174,9 +175,10 @@ class OverviewPage(QWidget):
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
 
-        # 设备列表卡头标签：显示设备总数
-        total = len(store.devices)
-        head = self._make_card_head("设备列表", f"{total} 台", "ok")
+        # 设备列表卡头标签：显示设备总数（保留 tag 引用，供 refresh_device_table 更新）
+        head, self._device_count_tag = self._make_card_head_with_tag(
+            "设备列表", f"{len(store.devices)} 台", "ok"
+        )
         cl.addWidget(head)
 
         body = QWidget()
@@ -199,7 +201,16 @@ class OverviewPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setRowCount(len(store.devices))
 
-        # 在线判断：连接串口且有采样数据时才在线
+        self._populate_device_rows()
+        bl.addWidget(self.table)
+        cl.addWidget(body, 1)
+        return card
+
+    def _populate_device_rows(self):
+        """按当前 store.devices 重建设备表格的所有行（含状态列）
+
+        与 _build_device_table / refresh_device_table 共用，避免行构建逻辑重复。
+        """
         from ..serial.serial_manager import serial_manager
         is_online = serial_manager.is_connected
 
@@ -216,9 +227,20 @@ class OverviewPage(QWidget):
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             status_item.setForeground(QColor(theme.HEX["OK"]) if is_online else QColor(theme.HEX["MUTED"]))
             self.table.setItem(row, 5, status_item)
-        bl.addWidget(self.table)
-        cl.addWidget(body, 1)
-        return card
+
+    def refresh_device_table(self):
+        """重建设备列表行（含从站地址列）+ 更新卡头计数 tag
+
+        用于国网配置页改址 / 设备管理增删后联动刷新本表的「从站地址」列。
+        """
+        if not hasattr(self, "table"):
+            return
+        self.table.clearContents()
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(store.devices))
+        self._populate_device_rows()
+        if self._device_count_tag is not None:
+            self._device_count_tag.setText(f"{len(store.devices)} 台")
 
     # ===== 辅助方法 =====
 
