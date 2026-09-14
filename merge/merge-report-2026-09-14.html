@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git 冲突合并报告 - 2026-09-14</title>
+<style>
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; margin: 0; background: #f5f7fa; color: #2d3748; }
+  .container { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 22px; border-bottom: 3px solid #4299e1; padding-bottom: 8px; }
+  h2 { font-size: 17px; margin-top: 28px; color: #2b6cb0; }
+  .card { background: #fff; border-radius: 8px; padding: 16px 20px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+  .badge.ok { background: #c6f6d5; color: #22543d; }
+  .badge.none { background: #e2e8f0; color: #4a5568; }
+  .badge.info { background: #bee3f8; color: #2a4365; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+  th, td { border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #edf2f7; }
+  code { background: #edf2f7; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .meta { color: #718096; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Git 冲突合并报告</h1>
+  <p class="meta">生成时间：2026-09-14 18:01（本地时间） · 仓库：vibeCoding-host-platform · 分支：main</p>
+
+  <div class="card">
+    <h2 style="margin-top:0">总体结果</h2>
+    <p><span class="badge ok">合并成功</span> <span class="badge none">无冲突（快进合并）</span></p>
+    <ul>
+      <li>本地工作区干净，<b>无未提交修改、无待推送提交</b>，无需先行推送。</li>
+      <li>云端 Gitee 有 <b>1 个新提交</b>，本地无领先提交，Git 采用<b>快进（fast-forward）</b>方式合并，未产生任何冲突。</li>
+      <li>GitHub（origin）云端无更新，无需拉取。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">一、本地修改检查</h2>
+    <table>
+      <tr><th>检查项</th><th>结果</th></tr>
+      <tr><td>工作区状态（git status）</td><td><span class="badge ok">干净</span> 无未提交修改</td></tr>
+      <tr><td>待推送提交（origin / gitee）</td><td><span class="badge none">无</span> 本地与 origin/main 完全同步</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">二、云端拉取（Gitee，1 个提交）</h2>
+    <table>
+      <tr><th>提交</th><th>说明</th></tr>
+      <tr><td><code>47fa89f</code></td><td>1、国网配置界面地址跟随设备列表地址； 2、波特率默认改成9600；</td></tr>
+    </table>
+    <p><b>云端改动文件（6 个文件，+270 行 / -162 行）：</b></p>
+    <ul>
+      <li><code>vibe-hmi/src/pages/gw_config_page.py</code>（259 行改动，重构）</li>
+      <li><code>vibe-hmi/tests/test_protocol.py</code>（+89 行，新增测试）</li>
+      <li><code>vibe-hmi/src/main_window.py</code>（+18 行）</li>
+      <li><code>vibe-hmi/src/serial/serial_manager.py</code>（+18 行）</li>
+      <li><code>vibe-hmi/src/pages/overview_page.py</code>（+36 行改动）</li>
+      <li><code>vibe-hmi/src/protocol/modbus_protocol.py</code>（12 行改动）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">三、冲突分析</h2>
+    <table>
+      <tr><th>场景</th><th>状态</th><th>处理方式</th></tr>
+      <tr><td>本地 vs 云端</td><td><span class="badge info">仅云端有新提交</span></td><td>快进合并，直接指向 <code>47fa89f</code>，无三方合并，不存在冲突</td></tr>
+      <tr><td>GitHub（origin）</td><td><span class="badge none">无更新</span></td><td>无需拉取</td></tr>
+    </table>
+    <p class="meta">结论：本次同步不涉及任何双边改动，不存在需要人工裁决的冲突。</p>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">四、合并后操作</h2>
+    <ul>
+      <li>合并方式：fast-forward，本地 main 由 <code>60c50b7</code> 前进到 <code>47fa89f</code>。</li>
+      <li>合并后验证：<code>pytest tests/test_protocol.py</code> 39 个用例全部通过；<code>make lint</code> 通过。</li>
+      <li>推送目标：origin（GitHub）与 gitee 双远端同步推送 main（含本报告提交）。</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>
