@@ -219,3 +219,12 @@ Issue 和 spec 以本地 markdown 文件形式存放在 `.scratch/<feature>/`。
 ### Domain docs
 
 单仓库布局（single-context）：根目录 `CONTEXT.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
+
+### Grilling 交互方式
+
+使用 grill 相关 skill（`grilling` / `grill-with-docs` / `grill-me`）向用户提问时，**必须用 AskUserQuestion 工具以选择题形式呈现，用户只点选、不手动输入**：
+
+- 每次调用最多 4 个问题（工具上限），每题 2~4 个选项；一轮问题超过 4 个时拆成多次调用
+- 推荐答案放第一个选项，标签末尾加"（推荐）"
+- 选项文案须自解释（脱离问题正文也能看懂在选什么）；允许多选的场景用 multiSelect
+- 禁止要求用户手动输入内容；工具自带的"Other"自由输入是用户自主选择，不算违反
