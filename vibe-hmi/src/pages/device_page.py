@@ -329,7 +329,9 @@ class DevicePage(QWidget):
         names = [store.devices[r]["name"] for r in checked]
         reply = QMessageBox.question(
             self, "删除确认",
-            f"确认删除 {len(names)} 个设备：{', '.join(names)}？\n设备的所有参数将同时删除。",
+            f"确认删除 {len(names)} 个设备：{', '.join(names)}？\n"
+            "设备的所有参数将同时删除。\n"
+            "历史采样与告警数据将保留在库中，但删除后不再可见。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:

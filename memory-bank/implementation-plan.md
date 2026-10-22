@@ -24,7 +24,7 @@
 | M3 协议层落地 | Modbus RTU 真实收发 + 模拟回退 | ✅ 完成 |
 | M4 AI 助手落地 | 真实 LLM function calling（5 工具） | ✅ 完成 |
 | M5 多设备架构 | 每设备独立参数表 + 设备管理 | ✅ 完成 |
-| M6 历史数据 | SQLite + 查询 + QtCharts + CSV 导出 | ✅ 完成 |
+| M6 历史数据 | SQLite + 按设备查询/删除 + QtCharts + CSV 导出（含设备列） | ✅ 完成 |
 | M7 打包发布 | PyInstaller 打 exe | ✅ 完成 |
 
 ## 3. 阶段 1：PySide6 工程骨架（已完成）

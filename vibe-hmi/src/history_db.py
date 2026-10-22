@@ -316,6 +316,62 @@ def purge_expired(retention_days: int) -> int:
 # 模式与 samples 一致：_get_conn() + try/commit/finally close + ? 参数化
 # ============================================================
 
+def _device_time_where(device_id: str, start_time: Optional[str], end_time: Optional[str]) -> tuple[str, list]:
+    """构造按设备 + 时间范围（闭区间）的 WHERE 片段，供删除/计数共用。"""
+    where = " WHERE device_id = ?"
+    params: list = [device_id]
+    if start_time:
+        where += " AND timestamp >= ?"
+        params.append(start_time)
+    if end_time:
+        where += " AND timestamp <= ?"
+        params.append(end_time)
+    return where, params
+
+
+def count_device_data(
+    device_id: str,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+) -> dict:
+    """预览：统计某设备将被删除的采样/报警条数（含未确认报警数）。
+
+    时间条件与 delete_device_data 完全一致，供删除前预览确认。
+    返回 {"samples": n, "alarms": m, "unacked": k}。
+    """
+    where, params = _device_time_where(device_id, start_time, end_time)
+    conn = _get_conn()
+    try:
+        samples = conn.execute("SELECT COUNT(*) FROM samples" + where, params).fetchone()[0]
+        alarms = conn.execute("SELECT COUNT(*) FROM alarms" + where, params).fetchone()[0]
+        unacked = conn.execute(
+            "SELECT COUNT(*) FROM alarms" + where + " AND acknowledged = 0", params,
+        ).fetchone()[0]
+        return {"samples": samples, "alarms": alarms, "unacked": unacked}
+    finally:
+        conn.close()
+
+
+def delete_device_data(
+    device_id: str,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+) -> dict:
+    """删除某设备的历史数据（采样 + 报警，同一事务），返回各自删除条数。
+
+    不传时间范围 = 删除该设备全部历史。与 clear_all 的区别：只影响指定设备。
+    """
+    where, params = _device_time_where(device_id, start_time, end_time)
+    conn = _get_conn()
+    try:
+        cur_samples = conn.execute("DELETE FROM samples" + where, params)
+        cur_alarms = conn.execute("DELETE FROM alarms" + where, params)
+        conn.commit()
+        return {"samples": cur_samples.rowcount, "alarms": cur_alarms.rowcount}
+    finally:
+        conn.close()
+
+
 def insert_alarm(device_id: str, content: str, level: str, ts: Optional[str] = None) -> int:
     """插入一条报警，返回新 id（cursor.lastrowid）。
 

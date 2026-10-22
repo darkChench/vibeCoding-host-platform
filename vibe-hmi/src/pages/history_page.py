@@ -11,7 +11,7 @@ import math
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QDateTimeEdit, QMessageBox, QFileDialog,
-    QSizePolicy, QComboBox, QGridLayout,
+    QSizePolicy, QComboBox, QGridLayout, QDialog, QRadioButton,
 )
 from PySide6.QtCore import (
     Qt, QDateTime, QEvent, QModelIndex, QAbstractItemModel, QMargins, QDate,
@@ -321,6 +321,163 @@ class CheckableComboBox(QComboBox):
         self._update_text()
 
 
+class DeleteHistoryDialog(QDialog):
+    """删除历史数据弹窗。
+
+    选设备（含已删除但有数据的设备）+ 全部/自定义时间范围，
+    条件变化实时预览将删条数（含未确认报警数），
+    确认后同一事务删除该设备的采样与报警记录。
+    """
+
+    def __init__(self, default_device_id: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("删除历史数据")
+        self.setMinimumWidth(460)
+        # 删除结果（执行成功后填充），供调用方刷新页面
+        self.deleted: dict = {}
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(12)
+
+        lbl_style = f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; font-weight: {theme.FW_BOLD};"
+
+        # 设备选择：现存设备在前，已删除但有历史数据的设备（孤儿）在后
+        self.combo_device = NoWheelComboBox()
+        self._device_ids: list[str] = []
+        cur = 0
+        for d in store.devices:
+            self._device_ids.append(d["id"])
+            self.combo_device.addItem(d.get("name") or d["id"])
+        existing = set(self._device_ids)
+        for did in history_db.get_devices():
+            if did not in existing:
+                self._device_ids.append(did)
+                self.combo_device.addItem(f"{did}（已删除）")
+        if default_device_id in self._device_ids:
+            cur = self._device_ids.index(default_device_id)
+        self.combo_device.setCurrentIndex(cur)
+        self.combo_device.currentIndexChanged.connect(lambda _: self._update_preview())
+
+        lbl_device = QLabel("设备")
+        lbl_device.setStyleSheet(lbl_style)
+        lay.addWidget(lbl_device)
+        lay.addWidget(self.combo_device)
+
+        # 时间范围：全部 / 自定义起止
+        lbl_range = QLabel("时间范围")
+        lbl_range.setStyleSheet(lbl_style)
+        lay.addWidget(lbl_range)
+        self.rb_all = QRadioButton("全部删除")
+        self.rb_all.setChecked(True)
+        self.rb_custom = QRadioButton("自定义时间范围")
+        self.rb_custom.toggled.connect(self._on_range_toggled)
+        lay.addWidget(self.rb_all)
+        lay.addWidget(self.rb_custom)
+
+        self.custom_widget = QWidget()
+        self.custom_widget.setVisible(False)
+        custom_row = QHBoxLayout(self.custom_widget)
+        custom_row.setContentsMargins(24, 0, 0, 0)
+        custom_row.setSpacing(8)
+        self.dt_start = PopupDateTimeEdit()
+        self.dt_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.dt_start.setDateTime(QDateTime.currentDateTime().addDays(-1))
+        self.dt_end = PopupDateTimeEdit()
+        self.dt_end.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.dt_end.setDateTime(QDateTime.currentDateTime())
+        for w in (self.dt_start, self.dt_end):
+            w.dateTimeChanged.connect(lambda _: self._update_preview())
+        lbl_from = QLabel("从")
+        lbl_from.setStyleSheet(lbl_style)
+        lbl_to = QLabel("到")
+        lbl_to.setStyleSheet(lbl_style)
+        custom_row.addWidget(lbl_from)
+        custom_row.addWidget(self.dt_start, 1)
+        custom_row.addWidget(lbl_to)
+        custom_row.addWidget(self.dt_end, 1)
+        lay.addWidget(self.custom_widget)
+
+        # 预览：实时显示将删除的条数
+        self.lbl_preview = QLabel("")
+        self.lbl_preview.setWordWrap(True)
+        lay.addWidget(self.lbl_preview)
+
+        # 按钮行
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_delete = QPushButton("删除")
+        self.btn_delete.setProperty("variant", "secondary")
+        self.btn_delete.clicked.connect(self._on_delete)
+        btn_row.addWidget(self.btn_cancel)
+        btn_row.addWidget(self.btn_delete)
+        lay.addLayout(btn_row)
+
+        self._update_preview()
+
+    # ----- 内部逻辑 -----
+
+    def _selected_device_id(self) -> str:
+        idx = self.combo_device.currentIndex()
+        return self._device_ids[idx] if 0 <= idx < len(self._device_ids) else ""
+
+    def _time_range(self) -> tuple[str | None, str | None]:
+        """当前选择的删除时间范围（None = 不限，用于全部删除）"""
+        if self.rb_all.isChecked() or not self.rb_custom.isChecked():
+            return None, None
+        return (
+            self.dt_start.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+            self.dt_end.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+        )
+
+    def _on_range_toggled(self):
+        self.custom_widget.setVisible(self.rb_custom.isChecked())
+        self._update_preview()
+
+    def _update_preview(self):
+        """条件变化 → 实时统计将删条数（含未确认报警数）"""
+        did = self._selected_device_id()
+        if not did:
+            self.lbl_preview.setText("无设备")
+            self.btn_delete.setEnabled(False)
+            return
+        start, end = self._time_range()
+        if start and end and start >= end:
+            self.lbl_preview.setText("开始时间必须早于结束时间")
+            self.btn_delete.setEnabled(False)
+            return
+        cnt = history_db.count_device_data(did, start, end)
+        range_text = "全部历史" if start is None else f"{start} ~ {end}"
+        self.lbl_preview.setText(
+            f"将删除该设备 {range_text} 内的数据：\n"
+            f"采样 {cnt['samples']:,} 条、报警 {cnt['alarms']:,} 条"
+            f"（含未确认 {cnt['unacked']:,} 条）"
+        )
+        self.btn_delete.setEnabled(cnt["samples"] > 0 or cnt["alarms"] > 0)
+
+    def _on_delete(self):
+        """二次确认 → 执行删除（采样 + 报警，同一事务）"""
+        did = self._selected_device_id()
+        if not did:
+            return
+        start, end = self._time_range()
+        cnt = history_db.count_device_data(did, start, end)
+        range_text = "全部历史" if start is None else f"{start} ~ {end} 的数据"
+        reply = QMessageBox.question(
+            self, "删除确认",
+            f"确认删除设备 {self.combo_device.currentText()} 的{range_text}？\n"
+            f"共采样 {cnt['samples']:,} 条、报警 {cnt['alarms']:,} 条，删除后不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        result = history_db.delete_device_data(did, start, end)
+        self.deleted = {"device_id": did, **result}
+        self.accept()
+
+
 class HistoryPage(QWidget):
     """历史数据页"""
 
@@ -470,22 +627,26 @@ class HistoryPage(QWidget):
         # 避免视觉上与下排组件贴得过近
         form.addSpacing(10)
 
-        # 第二行：采样点位 + 导出格式
+        # 第二行：查询设备 + 采样点位 + 导出格式
         fields_row = QHBoxLayout()
         fields_row.setSpacing(12)
 
-        sample = store.sample_params()
+        # 设备下拉：本页局部选择，仅决定本页查询/导出的数据来源，
+        # 不回写全局当前设备（默认停在进入页面时的当前设备）
+        self._query_device_id = ""
+        self.combo_device = NoWheelComboBox()
+        self.combo_device.setMinimumWidth(140)
+        self._refresh_device_combo()
+        self.combo_device.currentIndexChanged.connect(self._on_query_device_changed)
+
         self.combo_params = CheckableComboBox("请选择点位")
-        if sample:
-            self.combo_params.add_items([p.get("display", "") or p["name"] for p in sample])
-        else:
-            self.combo_params.addItem("暂无采样参数")
-            self.combo_params.setEnabled(False)
+        self._refresh_param_combo()
 
         self.combo_format = NoWheelComboBox()
         self.combo_format.addItems(["CSV"])
         self.combo_format.setStyleSheet("QComboBox { min-height: 28px; padding: 0 6px; }")
 
+        fields_row.addWidget(field("设备", self.combo_device))
         fields_row.addWidget(field("采样点位", self.combo_params), 1)
         fields_row.addWidget(field("导出格式", self.combo_format))
         form.addLayout(fields_row)
@@ -500,8 +661,12 @@ class HistoryPage(QWidget):
         self.btn_export = QPushButton("导出")
         self.btn_export.setProperty("variant", "secondary")
         self.btn_export.clicked.connect(self._export)
+        self.btn_delete = QPushButton("删除数据")
+        self.btn_delete.setProperty("variant", "secondary")
+        self.btn_delete.clicked.connect(self._open_delete_dialog)
         btn_row.addWidget(self.btn_query)
         btn_row.addWidget(self.btn_export)
+        btn_row.addWidget(self.btn_delete)
         btn_row.addStretch()
         form.addLayout(btn_row)
 
@@ -561,11 +726,119 @@ class HistoryPage(QWidget):
 
     # ===== 查询逻辑 =====
 
+    def showEvent(self, event):
+        """进入页面：设备列表可能在其他页增删过，重建设备下拉（保留原选择）"""
+        super().showEvent(event)
+        if hasattr(self, "combo_device"):
+            self._refresh_device_combo()
+
+    def _device_options(self) -> list[dict]:
+        """设备下拉数据源：现存设备在前，已删除但有历史数据的设备（孤儿）在后。
+
+        孤儿设备的配置已随设备删除，只有历史库里的 device_id 可用。
+        """
+        options = [
+            {"id": d["id"], "label": d.get("name") or d["id"], "deleted": False}
+            for d in store.devices
+        ]
+        existing = {o["id"] for o in options}
+        for did in history_db.get_devices():
+            if did not in existing:
+                options.append({"id": did, "label": f"{did}（已删除）", "deleted": True})
+        return options
+
+    def _refresh_device_combo(self):
+        """重建设备下拉。保留原选择；无效或首次进入时取全局当前设备。"""
+        options = self._device_options()
+        ids = [o["id"] for o in options]
+        if ids:
+            target = self._query_device_id
+            if target not in ids:
+                target = store.current_device_id
+            if target not in ids:
+                target = ids[0]
+        else:
+            target = ""
+        self._query_device_id = target
+        self._device_ids = ids
+        self.combo_device.blockSignals(True)  # 重建期间不触发参数联动
+        self.combo_device.clear()
+        for o in options:
+            self.combo_device.addItem(o["label"])
+            self.combo_device.setItemData(self.combo_device.count() - 1, o["id"])
+        if target:
+            self.combo_device.setCurrentIndex(ids.index(target))
+        self.combo_device.blockSignals(False)
+
+    def _is_deleted_device(self, device_id: str) -> bool:
+        """设备是否已被删除（配置不在 devices.json，仅历史库有数据）"""
+        return not any(d["id"] == device_id for d in store.devices)
+
+    def _query_device_label(self) -> str:
+        """查询设备的显示名：现存设备用配置名，已删除设备用 id（配置已丢）"""
+        if self._query_device_id and not self._is_deleted_device(self._query_device_id):
+            d = store.get_device(self._query_device_id) or {}
+            return d.get("name") or self._query_device_id
+        return f"{self._query_device_id}（已删除）" if self._query_device_id else ""
+
+    def _query_param_defs(self) -> list[dict]:
+        """查询设备的参数定义（name/display/unit）。
+
+        现存设备取配置；已删除设备配置已丢，从历史库反查存过的参数名。
+        """
+        if not self._query_device_id:
+            return []
+        if not self._is_deleted_device(self._query_device_id):
+            return store.sample_params(self._query_device_id)
+        return [
+            {"name": n, "display": n, "unit": ""}
+            for n in history_db.get_param_names(self._query_device_id)
+        ]
+
+    def _on_query_device_changed(self, index: int):
+        """切换查询设备 → 采样点位列表联动刷新（各设备参数独立配置）"""
+        if 0 <= index < len(self._device_ids):
+            self._query_device_id = self._device_ids[index]
+        self._refresh_param_combo()
+
+    def _refresh_param_combo(self):
+        """按查询设备重建采样点位下拉（该设备无采样数据时禁用）"""
+        params = self._query_param_defs()
+        self.combo_params.clear()
+        if params:
+            self.combo_params.setEnabled(True)
+            self.combo_params.add_items([p.get("display", "") or p["name"] for p in params])
+        else:
+            self.combo_params.setEnabled(False)
+            self.combo_params.addItem("暂无采样参数")
+
     def _get_selected_param_names(self) -> list[str]:
         """获取多选下拉中选中的参数名（通过显示名反查 name）"""
         selected_displays = self.combo_params.get_selected()
-        name_map = {p.get("display", "") or p["name"]: p["name"] for p in store.sample_params()}
+        name_map = {
+            p.get("display", "") or p["name"]: p["name"]
+            for p in self._query_param_defs()
+        }
         return [name_map[d] for d in selected_displays if d in name_map]
+
+    def _open_delete_dialog(self):
+        """删除历史数据：弹窗选设备 + 时间范围，预览条数并二次确认后执行"""
+        dlg = DeleteHistoryDialog(default_device_id=self._query_device_id, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.deleted:
+            return
+        info = dlg.deleted
+        QMessageBox.information(
+            self, "删除完成",
+            f"已删除 {info['samples']:,} 条采样、{info['alarms']:,} 条报警记录",
+        )
+        # 删除可能影响当前查询设备（清空图表）和设备列表（孤儿可能已清空）
+        self._last_rows = []
+        self.count_tag.setText("0 条")
+        self.empty_label.setText("📈  无符合条件的数据")
+        self.empty_label.setVisible(True)
+        self.chart_container.setVisible(False)
+        self._refresh_device_combo()
+        self._refresh_param_combo()
 
     def _on_range_clicked(self, label: str, secs: int):
         """快捷时间范围按钮：选中后取消其他按钮，隐藏自定义选择器"""
@@ -613,9 +886,9 @@ class HistoryPage(QWidget):
         self.btn_query.setText("查询中...")
         self.btn_query.setEnabled(False)
 
-        # 查询 SQLite
+        # 查询 SQLite（按本页选择的设备，非全局当前设备）
         rows = history_db.query(
-            device_id=store.current_device_id,
+            device_id=self._query_device_id,
             param_names=param_names,
             start_time=start,
             end_time=end,
@@ -816,7 +1089,7 @@ class HistoryPage(QWidget):
 
         每个时间戳一行，每个参数一列，便于在同一行查看同一时刻的多个采样值。
         时间列用 ="..." 写法避免被 Excel 自动识别为时间类型导致毫秒丢失。
-        表头示例：时间 | 温度(°C) | 压力(MPa) | 流量(m³/h)
+        表头示例：时间 | 设备 | 温度(°C) | 压力(MPa) | 流量(m³/h)
         """
         rows = self._last_rows
         if not rows:
@@ -829,13 +1102,14 @@ class HistoryPage(QWidget):
             return
 
         try:
-            # 参数名 → (display, unit) 映射
+            # 参数名 → (display, unit) 映射（按本页查询设备取，各设备参数独立配置；
+            # 已删除设备无配置，用历史库反查的参数名原文）
             param_map = {
                 p["name"]: {
                     "display": p.get("display", "") or p["name"],
                     "unit": p.get("unit", "") or "",
                 }
-                for p in store.sample_params()
+                for p in self._query_param_defs()
             }
 
             # 1. 收集所有出现的参数名（保持查询选中的顺序）
@@ -858,11 +1132,13 @@ class HistoryPage(QWidget):
                     time_order.append(ts)
                 time_map[ts][row["param_name"]] = row["value"]
 
-            # 3. 构造表头：时间 | 参数名(单位) | ...
+            # 3. 构造表头：时间 | 设备 | 参数名(单位) | ...
             #    表头右填充全角空格撑宽列，Excel 默认列宽即可显示完整内容，
             #    避免用户每次打开都要手动拉宽列。
+            device_name = self._query_device_label()
             FULLWIDTH_SPACE = "　"  # U+3000，Excel 中占一个汉字宽度，撑宽最稳
             header = ["时间" + FULLWIDTH_SPACE * 12]  # 容纳 ="2026-07-30 10:00:00.000"
+            header.append("设备" + FULLWIDTH_SPACE * max(4, 10 - len(device_name) * 2))
             for name in seen_params:
                 pinfo = param_map.get(name, {})
                 display = pinfo.get("display", name)
@@ -877,7 +1153,7 @@ class HistoryPage(QWidget):
                 writer = csv.writer(f)
                 writer.writerow(header)
                 for ts in time_order:
-                    line = [f'="{ts}"']  # ="..." 防止 Excel 自动转日期类型
+                    line = [f'="{ts}"', device_name]  # ="..." 防止 Excel 自动转日期类型
                     vals = time_map[ts]
                     for name in seen_params:
                         v = vals.get(name)
