@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QCheckBox, QPlainTextEdit, QScrollArea,
     QSizePolicy, QMessageBox,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QObject, Signal
 import os
 import time
 from datetime import datetime
@@ -104,6 +104,10 @@ class SerialPage(QWidget):
     def __init__(self):
         super().__init__()
         SerialPage._instance = self
+        # 协议日志桥：worker 线程 emit → 主线程 queued → append_line。
+        # 必须经信号投递：QTextDocument 不是线程安全的，worker 线程直接
+        # appendHtml 会跨线程创建 QObject 子项（堆损坏 → 随机卡死/崩溃）
+        _protocol_log_bridge.line.connect(self.append_line)
         self._current_tab = "raw"  # raw / stats / diagnostic
         self._show_timestamp = True
         self._display_mode = "ascii"  # "ascii" / "hex"（终端显示模式）
@@ -715,15 +719,31 @@ class SerialPage(QWidget):
         self._stop_auto_send()
 
 
+class _ProtocolLogBridge(QObject):
+    """协议日志跨线程桥。
+
+    协议层在 PollWorker 后台线程调用 protocol_log_callback，不能直接
+    append 到主线程的 QPlainTextEdit（QTextDocument 非线程安全，
+    跨线程 appendHtml 会创建错线程的 QObject 子项 → 堆损坏）。
+    经 Signal emit 后由 Qt 按接收者所在线程排队投递到主线程执行。
+    """
+    line = Signal(str, str, str)
+
+
+# 模块级单例（主线程创建，信号亲和主线程）
+_protocol_log_bridge = _ProtocolLogBridge()
+
+
 def protocol_log_callback(direction: str, label: str, content: str):
     """全局日志回调函数，供协议层注入 TX/RX 行到串口终端。
 
     PollWorker 在后台线程创建 ModbusProtocol 时，用此函数作为 log_callback。
     受"全部显示/仅手动"开关控制：仅手动模式下不显示自动轮询的报文。
+    注意：本函数可能在 worker 线程被调用，只做信号投递，不直接碰任何控件。
     """
     if SerialPage._instance:
         # 协议层自动轮询的 TX/RX 受 _listen_rx 开关控制
         # （手动发送走 SerialPage._send → append_line，不受此开关控制）
         if not SerialPage._instance._listen_rx:
             return
-        SerialPage._instance.append_line(direction, label, content)
+        _protocol_log_bridge.line.emit(direction, label, content)

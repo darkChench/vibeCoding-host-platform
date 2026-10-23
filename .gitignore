@@ -236,3 +236,6 @@ vibe-hmi/save/
 
 # Model config (contains API keys)
 vibe-hmi/config/model_config.json
+
+# 调试回路（卡死/泄漏复现工具，本地保留不提交）
+vibe-hmi/.debug/
