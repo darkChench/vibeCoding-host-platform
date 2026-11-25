@@ -4,7 +4,7 @@
 迁移自原型 js/pages/serial.js + js/components/console.js。
 布局：console（三行 grid：console-tabs / terminal / sendbar）。
 
-终端：暗底 #101a27，等宽字体，TX 绿 / RX 蓝 方向色，时间戳。
+终端：等宽字体，报文行整行按方向着色（TX 蓝 / RX 绿，不显示行首标签），时间戳。
 手动发送：HEX/ASCII 切换、行结束符追加、自动发送定时、发送历史。
 协议层自动收发的 TX/RX 报文也注入终端（通过 log_callback）。
 """
@@ -431,12 +431,18 @@ class SerialPage(QWidget):
             "info": "#617083", # 灰（INFO）
         }
         color = color_map.get(direction, "#17202c")
-        content_color = "#bf3a46" if direction == "warn" else "#17202c"
+        # 报文行（TX/RX）正文直接用方向色（RX 绿 / TX 蓝），行首不再显示标签：
+        # 颜色已经区分收发方向，标签是重复信息。
+        # 诊断行（TIMEOUT/CRC/WARN）和 INFO 提示的正文保持深色——
+        # 它们同样带 tx/rx 方向，按方向上色会把"超时"显示成绿色
+        is_frame = direction in ("tx", "rx") and label in ("TX", "RX")
+        content_color = color if is_frame or direction == "warn" else "#17202c"
         # HTML 行
         ts_part = f'<span style="color:#0b6fb3;font-weight:bold;">{ts}</span>  ' if ts else ""
-        label_str = f'<span style="color:{color};font-weight:bold;">{label}</span>'
+        # 行首标签只给非报文行（TIMEOUT/WARN/INFO 等）；报文行靠颜色区分方向
+        label_part = "" if is_frame else f'<span style="color:{color};font-weight:bold;">{label}</span>  '
         content_str = f'<span style="color:{content_color};">{display_content}</span>'
-        self.terminal.appendHtml(f'{ts_part}{label_str}  {content_str}')
+        self.terminal.appendHtml(f'{ts_part}{label_part}{content_str}')
         # 滚动到底部
         self.terminal.verticalScrollBar().setValue(self.terminal.verticalScrollBar().maximum())
 
