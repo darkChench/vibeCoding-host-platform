@@ -46,7 +46,10 @@ make lint
 # 5. 再次 lint 验证
 make lint
 
-# 6. 提交变更
+# 6. 记录本次决策与修改
+# 追加到 memory-bank/decision-log.md（见第 9 节"决策与修改记录"）
+
+# 7. 提交变更
 git add -A
 git commit -m "feat|fix|docs|chore: scope - summary"
 git push origin main
@@ -126,7 +129,7 @@ git push origin main
 ├── README.md                    # 项目主文档
 ├── AGENTS.md                    # AI Agent 行为准则（本文件）
 ├── vibe-hmi/                    # 上位机产品源码（PySide6，详见 vibe-hmi/AGENTS.md）
-├── memory-bank/                 # 核心规划文档（需求/技术栈/实施计划）
+├── memory-bank/                 # 核心规划文档（需求/技术栈/实施计划）+ 决策与修改记录
 ├── docs/                        # 知识库（HMI 规范/工作流/参考资料）
 ├── prompts/                     # 提示词入口
 ├── skills/                      # 可复用技能库
@@ -140,6 +143,7 @@ git push origin main
 - `AGENTS.md` - AI Agent 操作手册（本文件）
 - `vibe-hmi/AGENTS.md` - 上位机源码目录的 Agent 操作手册
 - `memory-bank/` - 产品需求 / 技术栈 / 实施计划（功能变化须同步）
+- `memory-bank/decision-log.md` - 决策与修改记录（每次决策和修改后追加；动手改动前先查相关记录）
 
 ## 7、Common Pitfalls（常见坑与修复）
 
@@ -187,6 +191,7 @@ feat|fix|docs|chore|refactor|test: scope - summary
 
 - [ ] 运行 `make lint` 通过
 - [ ] 更新对应文档
+- [ ] 已在 `memory-bank/decision-log.md` 追加本次决策与修改
 - [ ] 确认不携带临时文件或机密数据
 
 ## 9. Documentation Sync Rule（强制同步规则）
@@ -198,6 +203,15 @@ feat|fix|docs|chore|refactor|test: scope - summary
 
 **不确定的内容用 TODO 标注，不允许猜测。**
 
+### 决策与修改记录（强制）
+
+**每一次决策和修改都必须记录到 `memory-bank/decision-log.md`**，无论是否提交：
+
+- 记什么：功能与行为变化、bug 修复、配置与打包方式变化、文档与规则变化。既包括用户拍板的决定，也包括 Agent 自行做出的判断（方案取舍、默认值、范围边界）
+- 何时记：变化完成并验证后、结束本轮工作前写入；之后提交了就补上 commit 短哈希
+- 怎么记：只追加不改写，格式和模板见该文件头部；每条决策标明"用户决定"还是"Agent 判断"，并写明放弃的方案
+- grill 类 skill 的问答结论同样要记：选中的选项写入"决策"，未选中的选项写入"放弃的方案"
+
 ## 10、Memory Bank（记忆库）
 
 Memory-Bank目录中，存放所有核心规划文档，为AI提供持久、稳定的上下文。
@@ -205,6 +219,7 @@ Memory-Bank目录中，存放所有核心规划文档，为AI提供持久、稳�
 * `product-requirements.md`:  **产品需求文档** 。由AI根据用户输入的想法生成初稿。
 * `tech-stack.md`:  **技术栈文档** 。由AI推荐并论证。
 * `implementation-plan.md`:  **实施计划** 。由AI将需求分解为具体的、可验证的步骤。
+* `decision-log.md`:  **决策与修改记录** 。每次决策和修改后追加（见第 9 节）。
 
 ## 11、Agent skills
 

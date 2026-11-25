@@ -48,6 +48,7 @@ build.bat
 | [docs](docs/README.md) | 文档知识库总入口 |
 | [docs/workFlow](docs/workFlow/README.md) | 开发工作流 |
 | [docs/references](docs/references/) | 工程实践与质量门禁 |
+| [决策与修改记录](memory-bank/decision-log.md) | 每次决策和修改的记录：做了什么、为什么、放弃了什么 |
 | [tools](tools/README.md) | 工具配置 |
 | [assets/hmi](assets/hmi/index.html) | HTML 原型（交互蓝本） |
 

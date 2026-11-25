@@ -1,7 +1,8 @@
 # vibe-hmi Agent 手册
 
 Modbus RTU 上位机（PySide6 6.11 + Python 3.11 + pyserial + SQLite + QtCharts）。
-本目录是产品源码，改代码前先读仓库根目录 [AGENTS.md](../AGENTS.md) 与 [memory-bank/](../memory-bank/) 三份规划文档。
+本目录是产品源码，改代码前先读仓库根目录 [AGENTS.md](../AGENTS.md)、[memory-bank/](../memory-bank/) 下的规划文档，
+以及[决策与修改记录](../memory-bank/decision-log.md)。
 
 ## 常用命令
 
@@ -25,6 +26,10 @@ build.bat
 - 分层：UI 层（`src/pages/`）禁止直接访问串口；协议在 `src/protocol/`，串口在 `src/serial/`，轮询在 `src/workers/`，LLM 在 `src/ai/`
 - `src/store.py` 是全局状态单例，运行时配置持久化到 `config/*.json`
 - 历史采样与报警均存 `save/history.db`（SQLite，含按天过期策略，默认 90 天）
+
+## 记录要求
+
+- 本目录的每一次修改完成后，必须追加到仓库根目录的[决策与修改记录](../memory-bank/decision-log.md)，包括 Agent 自行做出的判断；细则见根目录 AGENTS.md 第 9 节
 
 ## 禁止事项
 
