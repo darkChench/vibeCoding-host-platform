@@ -11,12 +11,12 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QCheckBox,
-    QAbstractItemView, QHeaderView, QMessageBox, QFileDialog,
+    QAbstractItemView, QHeaderView, QFileDialog,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
-from .. import theme
+from .. import dialogs, toast, theme
 from ..store import store
 
 COLS = ["", "时间", "内容", "终端", "级别", "状态", "确认信息"]
@@ -226,12 +226,8 @@ class AlarmsPage(QWidget):
         ids = [a["id"] for a in store.alarms if not a.get("acknowledged")]
         if not ids:
             return
-        reply = QMessageBox.question(
-            self, "确认全部",
-            f"确认全部 {len(ids)} 条未确认报警？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if dialogs.confirm(self, f"确认全部 {len(ids)} 条报警？", "将把这些未确认的报警标记为已确认。",
+                           irreversible=True, ok_text="确认"):
             store.acknowledge(ids)
             self._refresh_table()
             self.alarms_changed.emit()
@@ -240,19 +236,15 @@ class AlarmsPage(QWidget):
         """删除勾选的报警行（含已确认的，所有勾选行都可删）。"""
         rows = self._checked_rows()  # 所有勾选行（含已确认）
         if not rows:
-            QMessageBox.information(self, "删除报警", "请先勾选要删除的报警（左侧复选框）")
+            dialogs.warning(self, "尚未勾选报警", "请先在左侧勾选要删除的报警。")
             return
         alarms = store.alarms
         ids = [alarms[r]["id"] for r in rows if r < len(alarms)]
         if not ids:
             return
 
-        reply = QMessageBox.question(
-            self, "删除报警",
-            f"确认删除勾选的 {len(ids)} 条报警？\n此操作不可恢复。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not dialogs.confirm(self, f"删除 {len(ids)} 条报警？", "将删除勾选的报警记录。",
+                               danger=True, irreversible=True, ok_text="删除"):
             return
 
         # 逐条删除（store.delete_alarm 内部已 reload 内存）
@@ -260,7 +252,7 @@ class AlarmsPage(QWidget):
         self._refresh_table()
         self.alarms_changed.emit()
         if deleted > 0:
-            QMessageBox.information(self, "删除完成", f"已删除 {deleted} 条报警")
+            toast.show(self, f"已删除 {deleted} 条报警")
 
     @staticmethod
     def _normalize_ts(ts: str) -> str:
@@ -304,6 +296,6 @@ class AlarmsPage(QWidget):
                         "已确认" if a.get("acknowledged") else "未确认",
                         a.get("ack_user", ""), a.get("ack_time", ""),
                     ])
-            QMessageBox.information(self, "导出成功", f"已导出 {len(store.alarms)} 条报警到\n{path}")
+            dialogs.success(self, "导出成功", f"已导出 {len(store.alarms)} 条报警。", detail=path, reveal=path)
         except Exception as e:
-            QMessageBox.warning(self, "导出失败", str(e))
+            dialogs.error(self, "导出失败", "文件没有写出来。", detail=str(e))

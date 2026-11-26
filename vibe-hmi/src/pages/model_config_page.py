@@ -8,13 +8,13 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QGridLayout, QLineEdit,
-    QComboBox, QCheckBox, QMessageBox, QAbstractItemView, QHeaderView,
+    QComboBox, QCheckBox, QAbstractItemView, QHeaderView,
     QScrollArea, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QWheelEvent
 
-from .. import theme
+from .. import dialogs, theme
 from ..store import store
 
 # 预设提供商
@@ -356,13 +356,13 @@ class ModelConfigPage(QWidget):
         model = self.f_model.text().strip()
 
         if not base_url or not base_url.startswith("http"):
-            QMessageBox.warning(self, "校验失败", "Base URL 必须以 http:// 或 https:// 开头")
+            dialogs.warning(self, "Base URL 格式不对", "必须以 http:// 或 https:// 开头。")
             return
         if not api_key:
-            QMessageBox.warning(self, "校验失败", "API Key 不能为空")
+            dialogs.warning(self, "API Key 不能为空", "请填写服务商提供的 API Key。")
             return
         if not model:
-            QMessageBox.warning(self, "校验失败", "模型不能为空")
+            dialogs.warning(self, "模型名称不能为空", "请填写要使用的模型名称。")
             return
 
         enabled = self.cb_enabled.isChecked()
@@ -389,8 +389,8 @@ class ModelConfigPage(QWidget):
         if not checked:
             return
         ids = [store.model_config[r]["id"] for r in checked]
-        reply = QMessageBox.question(self, "删除确认", f"确认删除 {len(ids)} 个提供商配置？")
-        if reply == QMessageBox.StandardButton.Yes:
+        if dialogs.confirm(self, f"删除 {len(ids)} 个提供商配置？", "删除后需要重新添加，API Key 不会保留。",
+                           danger=True, irreversible=True, ok_text="删除"):
             for cid in ids:
                 store.delete_model_config(cid)
             # 模型配置变化，清空 AI 对话历史（避免旧模型上下文误导新模型）
@@ -410,7 +410,7 @@ class ModelConfigPage(QWidget):
         model = self.f_model.text().strip()
 
         if not base_url or not api_key or not model:
-            QMessageBox.warning(self, "测试失败", "请先填写 Base URL、API Key 和模型")
+            dialogs.warning(self, "信息不完整", "请先填写 Base URL、API Key 和模型，再测试连接。")
             return
 
         self.btn_test.setText("测试中...")
@@ -423,7 +423,7 @@ class ModelConfigPage(QWidget):
             client._enable_web_search = False  # 测试连接不联网搜索，避免消耗搜索额度
             data = client.chat([{"role": "user", "content": "你好"}])
             reply = data["choices"][0]["message"].get("content", "")
-            QMessageBox.information(self, "连接成功", f"模型 {model} 连接正常\n回复：{reply}")
+            dialogs.success(self, "连接成功", f"模型 {model} 连接正常。", detail=reply)
         except Exception as e:
             # 尝试提取 HTTP 错误详情
             error_msg = str(e)
@@ -431,7 +431,7 @@ class ModelConfigPage(QWidget):
                 status = e.response.status_code
                 body = e.response.text[:500]
                 error_msg = f"HTTP {status}\n{body}"
-            QMessageBox.warning(self, "连接失败", error_msg[:500])
+            dialogs.error(self, "连接失败", "请检查 Base URL、API Key 和模型名称。", detail=error_msg[:500])
         finally:
             self.btn_test.setText("测试连接")
             self.btn_test.setEnabled(True)

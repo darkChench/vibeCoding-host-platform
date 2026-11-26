@@ -36,9 +36,9 @@ build.bat
 | `main.py` | 程序入口 |
 | `build.bat` | 一键打包脚本 |
 | `vibe-hmi.spec` | PyInstaller 打包配置 |
-| `src/` | 源码（store / protocol / serial / ai / pages） |
+| `src/` | 源码（store / dialogs / toast / protocol / serial / ai / pages） |
 | `config/` | 运行时配置（JSON，自动生成） |
 | `save/` | 历史采样数据库（SQLite，自动生成） |
 | `history/` | 串口日志（TXT，自动生成） |
 | `assets/icons/` | 图标资源 |
-| `tests/` | 协议层 pytest 测试 |
+| `tests/` | pytest 测试（协议层 / 串口 / 历史库 / 弹框 / 轻提示） |

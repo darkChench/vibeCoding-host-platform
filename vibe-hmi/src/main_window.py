@@ -8,10 +8,10 @@
 """
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout,
-    QLabel, QPushButton, QComboBox, QSizePolicy, QMessageBox,
+    QLabel, QPushButton, QComboBox, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
-from . import theme
+from . import dialogs, theme
 from .store import store
 from .page_registry import PAGES, get_page
 from .sidebar import Sidebar
@@ -271,7 +271,7 @@ class MainWindow(QMainWindow):
             ok = serial_manager.connect(port, baud, data_bits, parity, stopbits)
             if not ok:
                 # 严格模式：连接失败（串口被占用/不存在等），提示用户
-                QMessageBox.warning(self, "连接失败", serial_manager.last_error or f"无法连接 {port}")
+                dialogs.error(self, "连接失败", serial_manager.last_error or f"无法连接 {port}。")
 
     def _on_refresh_ports(self):
         """刷新串口列表"""

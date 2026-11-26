@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 
-from .. import theme
+from .. import dialogs, theme
 from ..store import store
 from ..ai.llm_worker import LLMWorker
 from ..ai import ai_tools
@@ -319,7 +319,7 @@ class AIAssistantPage(QWidget):
         if not text:
             return
         if not store.active_model_config():
-            QMessageBox.warning(self, "未配置模型", "请先在模型配置页添加并启用 AI 模型")
+            dialogs.warning(self, "尚未配置 AI 模型", "请先在「模型配置」页添加并启用一个模型。")
             return
 
         # 记录当前用户问题，供 summarize 阶段引用（让 LLM 针对问题作答）

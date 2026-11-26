@@ -11,7 +11,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QPushButton, QLabel,
     QLineEdit, QComboBox, QCheckBox, QPlainTextEdit, QScrollArea,
-    QSizePolicy, QMessageBox,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
 from PySide6.QtGui import QTextCharFormat, QTextCursor, QColor, QFont
@@ -21,6 +21,7 @@ import time
 from datetime import datetime
 
 from .. import theme
+from .. import dialogs
 from ..store import store
 from .. import paths
 from ..serial.serial_manager import serial_manager
@@ -394,9 +395,9 @@ class SerialPage(QWidget):
         """立即保存：把当前日志保存为 txt（不清空终端）"""
         filepath = self._write_log_to_file()
         if filepath:
-            QMessageBox.information(self, "保存成功", f"已保存到\n{filepath}")
+            dialogs.success(self, "保存成功", "串口日志已保存到本地。", detail=filepath, reveal=filepath)
         else:
-            QMessageBox.warning(self, "保存失败", "日志保存失败")
+            dialogs.error(self, "日志保存失败", "请确认 history 目录可以写入，然后重试。")
 
     def _open_history_dir(self):
         """打开本地保存目录（history/）"""
@@ -411,7 +412,7 @@ class SerialPage(QWidget):
             else:
                 subprocess.Popen(["xdg-open", HISTORY_DIR])
         except Exception as e:
-            QMessageBox.warning(self, "打开失败", f"无法打开目录：{e}")
+            dialogs.error(self, "无法打开目录", "请确认 history 目录存在。", detail=str(e))
 
     def _line_segments(self, line: list[str]) -> Segments:
         """一行日志在终端里的显示定义。

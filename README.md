@@ -77,10 +77,12 @@ vibe-hmi/
 │   ├── theme.py            # 设计令牌
 │   ├── style.py            # 全局 QSS
 │   ├── store.py            # 全局状态管理
+│   ├── dialogs.py          # 应用内弹框（遮罩 + 卡片，替代系统弹框）
+│   ├── toast.py            # 右下角轻提示
 │   ├── protocol/           # Modbus RTU 协议层
 │   ├── serial/             # pyserial 串口管理
 │   ├── ai/                 # LLM 客户端 + 工具层
 │   ├── workers/            # 后台线程
 │   └── pages/              # 12 个页面
-└── tests/                  # 协议层测试（30 个 pytest）
+└── tests/                  # pytest 测试（协议层 / 串口 / 历史库 / 弹框 / 轻提示）
 ```

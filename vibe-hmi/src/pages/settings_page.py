@@ -8,12 +8,12 @@
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QMessageBox, QLineEdit,
+    QFrame, QLineEdit,
 )
 from PySide6.QtCore import Qt, QTimer
 from datetime import datetime
 
-from .. import theme
+from .. import dialogs, toast, theme
 from ..store import store
 
 
@@ -217,36 +217,27 @@ class SettingsPage(QWidget):
         # 同步回输入框（规范化显示）
         self.edit_retention.setText(str(days))
         tip = "永久保留（不自动清理）" if days == 0 else f"保留 {days} 天，超期自动清理"
-        QMessageBox.information(self, "策略已保存", f"历史数据保留策略：{tip}")
+        toast.show(self, f"保留策略已保存：{tip}")
 
     def _purge_now(self):
         """立即按当前保留天数清理过期数据"""
         days = self._get_retention_days()
         if days == 0:
-            QMessageBox.information(self, "无需清理", "当前策略为永久保留（0 天），没有数据会被清理。")
+            dialogs.info(self, "无需清理", "当前策略为永久保留（0 天），没有数据会被清理。")
             return
-        reply = QMessageBox.question(
-            self, "确认清理",
-            f"将删除 {days} 天前的所有历史数据，此操作不可恢复。\n确认清理？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if dialogs.confirm(self, "清理过期数据？", f"将删除 {days} 天前的所有历史数据。",
+                           irreversible=True, ok_text="开始清理"):
             from ..history_db import purge_expired
             deleted = purge_expired(days)
             self._refresh_db_count()
-            QMessageBox.information(self, "清理完成", f"已删除 {deleted:,} 条过期数据")
+            toast.show(self, f"已删除 {deleted:,} 条过期数据")
 
     # ===== 操作 =====
 
     def _clean_log(self):
         """清理日志（二次确认）"""
-        reply = QMessageBox.question(
-            self, "清理日志",
-            "确认清理日志？\n（默认保留最近 7 天的日志）",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            QMessageBox.information(self, "清理完成", "日志已清理（保留最近 7 天）")
+        if dialogs.confirm(self, "清理日志？", "将清理本地日志，默认保留最近 7 天。", ok_text="开始清理"):
+            toast.show(self, "日志已清理，保留最近 7 天")
 
     def _export_diag(self):
         """导出诊断（loading 动画 → 完成提示）"""
@@ -258,10 +249,8 @@ class SettingsPage(QWidget):
     def _export_done(self):
         self.btn_export.setText("导出诊断")
         self.btn_export.setEnabled(True)
-        QMessageBox.information(
-            self, "导出完成",
-            "已打包运行日志、配置文件和通信统计\n保存到 ./save/diag.zip"
-        )
+        dialogs.success(self, "导出完成", "已打包运行日志、配置文件和通信统计。",
+                        detail="保存位置：./save/diag.zip")
 
     # ===== 辅助 =====
 

@@ -10,8 +10,8 @@ import math
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QDateTimeEdit, QMessageBox, QFileDialog,
-    QSizePolicy, QComboBox, QGridLayout, QDialog, QRadioButton,
+    QFrame, QDateTimeEdit, QFileDialog,
+    QSizePolicy, QComboBox, QGridLayout, QRadioButton,
 )
 from PySide6.QtCore import (
     Qt, QDateTime, QEvent, QModelIndex, QAbstractItemModel, QMargins, QDate,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QCalendarWidget
 from PySide6.QtGui import QColor, QPainter, QWheelEvent, QBrush
 
 from .. import theme
+from .. import dialogs, toast
 from ..store import store
 from .. import history_db
 
@@ -321,24 +322,24 @@ class CheckableComboBox(QComboBox):
         self._update_text()
 
 
-class DeleteHistoryDialog(QDialog):
-    """删除历史数据弹窗。
+class DeleteHistoryDialog(dialogs.DialogOverlay):
+    """删除历史数据弹框（应用内卡片，做法见 dialogs 模块）。
 
     选设备（含已删除但有数据的设备）+ 全部/自定义时间范围，
     条件变化实时预览将删条数（含未确认报警数），
-    确认后同一事务删除该设备的采样与报警记录。
+    点"删除"后再叠一个二次确认，确认后同一事务删除该设备的采样与报警记录。
+
+    用法：
+        dlg = DeleteHistoryDialog(default_device_id, parent)
+        if dlg.exec():          # 阻塞到关闭；执行了删除才返回 True
+            ... dlg.deleted     # {"device_id", "samples", "alarms"}
     """
 
     def __init__(self, default_device_id: str = "", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("删除历史数据")
-        self.setMinimumWidth(460)
-        # 删除结果（执行成功后填充），供调用方刷新页面
-        self.deleted: dict = {}
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(12)
+        form = QWidget()
+        lay = QVBoxLayout(form)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
 
         lbl_style = f"color: {theme.HEX['MUTED']}; font-size: {theme.FS_SM}pt; font-weight: {theme.FW_BOLD};"
 
@@ -398,24 +399,31 @@ class DeleteHistoryDialog(QDialog):
         custom_row.addWidget(self.dt_end, 1)
         lay.addWidget(self.custom_widget)
 
-        # 预览：实时显示将删除的条数
+        # 预览：实时显示将删除的条数（浅底色块，文字是纯文本）
         self.lbl_preview = QLabel("")
+        self.lbl_preview.setTextFormat(Qt.TextFormat.PlainText)
         self.lbl_preview.setWordWrap(True)
+        self.lbl_preview.setStyleSheet(
+            "QLabel { background: #f7f9fc; color: #405066; border: 1px solid #e6ecf3;"
+            "border-radius: 6px; padding: 9px 12px; font-size: 10pt; font-weight: 400; }"
+        )
         lay.addWidget(self.lbl_preview)
 
-        # 按钮行
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        self.btn_cancel = QPushButton("取消")
-        self.btn_cancel.clicked.connect(self.reject)
-        self.btn_delete = QPushButton("删除")
-        self.btn_delete.setProperty("variant", "secondary")
-        self.btn_delete.clicked.connect(self._on_delete)
-        btn_row.addWidget(self.btn_cancel)
-        btn_row.addWidget(self.btn_delete)
-        lay.addLayout(btn_row)
-
+        # 删除结果（执行成功后填充），供调用方刷新页面
+        self.deleted: dict = {}
+        super().__init__(
+            dialogs.resolve_window(parent), dialogs.DANGER, "删除历史数据",
+            "选择设备和时间范围，删除后不可恢复。", content=form,
+            # "删除"带回调：点了先二次确认，不直接关弹框
+            actions=(dialogs.Action("取消", "secondary", None, False),
+                     dialogs.Action("删除", "danger", self._on_delete, None)),
+            default=self.combo_device, closable=False, cancel_result=False, width=500,
+        )
         self._update_preview()
+
+    def exec(self) -> bool:
+        """显示并阻塞到关闭；返回是否执行了删除（执行了的话结果在 self.deleted）"""
+        return dialogs.run(self) is True
 
     # ----- 内部逻辑 -----
 
@@ -441,12 +449,12 @@ class DeleteHistoryDialog(QDialog):
         did = self._selected_device_id()
         if not did:
             self.lbl_preview.setText("无设备")
-            self.btn_delete.setEnabled(False)
+            self.buttons[-1].setEnabled(False)
             return
         start, end = self._time_range()
         if start and end and start >= end:
             self.lbl_preview.setText("开始时间必须早于结束时间")
-            self.btn_delete.setEnabled(False)
+            self.buttons[-1].setEnabled(False)
             return
         cnt = history_db.count_device_data(did, start, end)
         range_text = "全部历史" if start is None else f"{start} ~ {end}"
@@ -455,27 +463,26 @@ class DeleteHistoryDialog(QDialog):
             f"采样 {cnt['samples']:,} 条、报警 {cnt['alarms']:,} 条"
             f"（含未确认 {cnt['unacked']:,} 条）"
         )
-        self.btn_delete.setEnabled(cnt["samples"] > 0 or cnt["alarms"] > 0)
+        self.buttons[-1].setEnabled(cnt["samples"] > 0 or cnt["alarms"] > 0)
 
     def _on_delete(self):
-        """二次确认 → 执行删除（采样 + 报警，同一事务）"""
+        """点"删除"：二次确认（叠在本弹框上面）→ 执行删除（采样 + 报警，同一事务）→ 关闭"""
         did = self._selected_device_id()
         if not did:
             return
         start, end = self._time_range()
         cnt = history_db.count_device_data(did, start, end)
         range_text = "全部历史" if start is None else f"{start} ~ {end} 的数据"
-        reply = QMessageBox.question(
-            self, "删除确认",
-            f"确认删除设备 {self.combo_device.currentText()} 的{range_text}？\n"
-            f"共采样 {cnt['samples']:,} 条、报警 {cnt['alarms']:,} 条，删除后不可恢复。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ok = dialogs.confirm(
+            self, f"删除 {self.combo_device.currentText()} 的历史数据？",
+            f"将删除{range_text}：采样 {cnt['samples']:,} 条、报警 {cnt['alarms']:,} 条。",
+            danger=True, irreversible=True, ok_text="删除",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not ok:
             return
         result = history_db.delete_device_data(did, start, end)
         self.deleted = {"device_id": did, **result}
-        self.accept()
+        self._finish(True)
 
 
 class HistoryPage(QWidget):
@@ -824,13 +831,10 @@ class HistoryPage(QWidget):
     def _open_delete_dialog(self):
         """删除历史数据：弹窗选设备 + 时间范围，预览条数并二次确认后执行"""
         dlg = DeleteHistoryDialog(default_device_id=self._query_device_id, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.deleted:
+        if not dlg.exec():
             return
         info = dlg.deleted
-        QMessageBox.information(
-            self, "删除完成",
-            f"已删除 {info['samples']:,} 条采样、{info['alarms']:,} 条报警记录",
-        )
+        toast.show(self, f"已删除 {info['samples']:,} 条采样、{info['alarms']:,} 条报警记录")
         # 删除可能影响当前查询设备（清空图表）和设备列表（孤儿可能已清空）
         self._last_rows = []
         self.count_tag.setText("0 条")
@@ -874,12 +878,12 @@ class HistoryPage(QWidget):
         """查询历史数据 → 渲染趋势曲线"""
         param_names = self._get_selected_param_names()
         if not param_names:
-            QMessageBox.warning(self, "查询", "请至少选择一个采样点位")
+            dialogs.warning(self, "尚未选择采样点位", "请至少勾选一个采样点位后再查询。")
             return
 
         start, end = self._get_time_range()
         if start >= end:
-            QMessageBox.warning(self, "查询", "开始时间必须早于结束时间")
+            dialogs.warning(self, "时间范围不正确", "开始时间必须早于结束时间。")
             return
 
         # loading
@@ -1093,7 +1097,7 @@ class HistoryPage(QWidget):
         """
         rows = self._last_rows
         if not rows:
-            QMessageBox.warning(self, "导出", "请先查询数据")
+            dialogs.warning(self, "还没有可导出的数据", "请先查询出数据，再导出。")
             return
 
         default_name = f"history_{QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss')}.csv"
@@ -1163,9 +1167,10 @@ class HistoryPage(QWidget):
                             line.append(f"{v:.4f}")
                     writer.writerow(line)
 
-            QMessageBox.information(
+            dialogs.success(
                 self, "导出成功",
-                f"已导出 {len(time_order)} 个时间点 × {len(seen_params)} 个参数到\n{path}"
+                f"已导出 {len(time_order)} 个时间点 × {len(seen_params)} 个参数。",
+                detail=path, reveal=path,
             )
         except Exception as e:
-            QMessageBox.warning(self, "导出失败", str(e))
+            dialogs.error(self, "导出失败", "文件没有写出来。", detail=str(e))

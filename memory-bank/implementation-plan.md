@@ -26,6 +26,7 @@
 | M5 多设备架构 | 每设备独立参数表 + 设备管理 | ✅ 完成 |
 | M6 历史数据 | SQLite + 按设备查询/删除 + QtCharts + CSV 导出（含设备列） | ✅ 完成 |
 | M7 打包发布 | PyInstaller 打 exe | ✅ 完成 |
+| M8 应用内弹框与轻提示 | 替换全部 81 处系统弹框；"删除历史数据"改为卡片式弹窗；简短成功反馈改轻提示 | ✅ 完成 |
 
 ## 3. 阶段 1：PySide6 工程骨架（已完成）
 
@@ -49,6 +50,8 @@ vibe-hmi/
 │   ├── main_window.py            # 主窗口（菜单栏/工具栏/状态栏）
 │   ├── paths.py                  # 路径解析（开发/打包双模式）
 │   ├── history_db.py             # SQLite 历史数据库（采样 + 报警）
+│   ├── dialogs.py                # 应用内弹框（遮罩 + 卡片，替代系统弹框）
+│   ├── toast.py                  # 右下角轻提示
 │   ├── protocol/modbus_protocol.py  # Modbus RTU 协议层
 │   ├── serial/serial_manager.py    # pyserial 串口管理器
 │   ├── workers/poll_worker.py      # 后台轮询线程

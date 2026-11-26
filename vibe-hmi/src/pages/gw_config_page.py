@@ -12,13 +12,13 @@ import struct
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QComboBox, QLineEdit, QFrame, QMessageBox, QGridLayout,
+    QComboBox, QLineEdit, QFrame, QGridLayout,
     QDateTimeEdit, QSizePolicy, QSpinBox, QScrollArea,
 )
 from PySide6.QtCore import Qt, QDateTime, QDate, QTime, Signal, QTimer
 from PySide6.QtGui import QWheelEvent
 
-from .. import theme
+from .. import dialogs, theme
 from ..store import store
 from ..serial.serial_manager import serial_manager
 from ..protocol.modbus_protocol import (
@@ -999,10 +999,7 @@ class GwConfigPage(QWidget):
                   21 03：传感器类型标识（1 字节）
         """
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "读取失败",
-                "串口未连接，无法读取设备基本信息。"
-            )
+            self._warn_not_connected("读取设备基本信息")
             return
 
         # modbus 从机地址取自当前选中设备
@@ -1010,25 +1007,17 @@ class GwConfigPage(QWidget):
 
         # 构建请求帧：<slave> 66 07 01 21 01 21 02 21 03 <CRC>
         request = build_gw_dev_info_read_frame(slave)
-        hex_req = " ".join(f"{b:02X}" for b in request)
 
         try:
             resp_bytes = serial_manager.transact(bytes(request))
             if not resp_bytes:
-                QMessageBox.warning(
-                    self, "读取失败",
-                    "设备无响应（超时），请检查串口连接和从机地址。"
-                )
+                self._read_failed("设备无响应（超时）。请检查串口连接和从机地址。")
                 return
 
             parsed = parse_gw_dev_info_response(list(resp_bytes))
             if parsed is None:
-                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-                QMessageBox.warning(
-                    self, "读取失败",
-                    f"响应帧解析失败：\n{hex_resp}\n\n"
-                    f"（期望：FC=0x{GW_FC:02X} + TLV 数据 + CRC 通过）"
-                )
+                self._read_failed("响应帧解析失败。", resp_bytes,
+                                  f"FC=0x{GW_FC:02X} + TLV 数据 + CRC 通过")
                 return
 
             # 把表计 ID 的 hex 字符串解析回 6 字节 → 提取各字段
@@ -1082,24 +1071,47 @@ class GwConfigPage(QWidget):
             self._set_device_synced(True)
 
             # 汇总弹窗
-            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-            QMessageBox.information(
-                self, "读取成功",
-                f"已从设备（从机地址 {slave}）读取设备基本信息标识\n\n"
-                f"请求：{hex_req}\n"
-                f"响应：{hex_resp}\n\n"
-                f"解析结果：\n"
-                f"  设备型号：{parsed['model']}\n"
-                f"  厂商代码：{decoded['vendor_hex']}\n"
-                f"  版本标签：{decoded['ver_label']}\n"
-                f"  版本号：{decoded['ver_num']}\n"
-                f"  产品序列号：{decoded['serial']}\n"
-                f"  表计 ID（H）：{meter_id_h_fmt}\n"
-                f"  表计 ID（D）：{decoded['meter_id_d']}\n"
-                f"  传感器类型：{parsed['sensor_type']}"
-            )
+            self._read_ok("设备基本信息标识", slave, request, resp_bytes, [
+                f"设备型号：{parsed['model']}",
+                f"厂商代码：{decoded['vendor_hex']}",
+                f"版本标签：{decoded['ver_label']}",
+                f"版本号：{decoded['ver_num']}",
+                f"产品序列号：{decoded['serial']}",
+                f"表计 ID（H）：{meter_id_h_fmt}",
+                f"表计 ID（D）：{decoded['meter_id_d']}",
+                f"传感器类型：{parsed['sensor_type']}",
+            ])
         except Exception as e:
-            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
+            self._read_failed(f"读取时出现异常：{e}")
+
+    # ----- 弹框文案（本页的读写结果统一走这几个函数）-----
+
+    def _warn_not_connected(self, action: str):
+        """串口未连接：操作做不了，说明连接之后能做什么"""
+        dialogs.warning(self, "串口未连接", f"连接串口后才能{action}。")
+
+    def _read_failed(self, reason: str, resp_bytes=None, expect: str = ""):
+        """读取失败：原因放正文，响应报文放详情区（可复制，便于排错）"""
+        detail = None
+        if resp_bytes is not None:
+            detail = "响应帧  " + " ".join(f"{b:02X}" for b in resp_bytes)
+            if expect:
+                detail += f"\n（期望：{expect}）"
+        dialogs.error(self, "读取失败", reason, detail=detail)
+
+    def _read_ok(self, what: str, slave: int, request: list[int], resp_bytes: bytes,
+                 result_lines: list[str]):
+        """读取成功：解析结果放详情区，后面附请求 / 响应报文"""
+        parts = list(result_lines)
+        parts.append("请求  " + " ".join(f"{b:02X}" for b in request))
+        parts.append("响应  " + " ".join(f"{b:02X}" for b in resp_bytes))
+        dialogs.success(self, "读取成功", f"已从设备（从机地址 {slave}）读取{what}。",
+                        detail="\n".join(parts))
+
+    def _write_failed(self, lines: list[str]):
+        """写入中途失败：哪一步、为什么放正文；请求回包和进度放详情区"""
+        dialogs.error(self, "写入失败", lines[0] + "，后面的步骤没有执行。",
+                      detail="\n".join(lines[1:]))
 
     # 设备基本信息写入步骤顺序：表计ID → 设备型号
     # 每步等待设备回包后再发下一步，全部成功提示"写入成功"，任一失败提示"写入失败"
@@ -1128,33 +1140,24 @@ class GwConfigPage(QWidget):
         serial = self.f_serial.value()
 
         if not meter_id_h:
-            QMessageBox.warning(
-                self, "写入失败",
-                "表计ID（H）为空，请先填写厂商代码/版本标签/版本号/产品序列号"
-            )
+            dialogs.warning(self, "表计 ID（H）还没有生成",
+                            "请先填写厂商代码、版本标签、版本号和产品序列号。")
             return
         if not model:
-            QMessageBox.warning(
-                self, "写入失败",
-                "设备型号不能为空"
-            )
+            dialogs.warning(self, "设备型号不能为空", "请填写设备型号后再写入。")
             return
 
         # 3) 串口未连接：演示模式，仅展示待写入值
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "写入失败",
-                "串口未连接，无法写入设备信息。\n（演示模式将只显示待写入的值）"
-            )
-            QMessageBox.information(
-                self, "待写入设备信息（演示）",
+            # 串口未连接：不写入，只让用户预览待写入的值
+            dialogs.info(self, "待写入的设备信息（预览）", "串口未连接，以下内容还没有写入设备。", detail=(
                 f"设备型号：{model}\n"
                 f"厂商代码：{vendor}\n"
                 f"版本标签：{ver_label}\n"
                 f"版本号：{ver_num}\n"
                 f"产品序列号：{serial}\n"
-                f"表计ID（H）：{meter_id_h}"
-            )
+                f"表计 ID（H）：{meter_id_h}"
+            ))
             return
 
         # 4) 初始化分步写入状态机
@@ -1247,7 +1250,7 @@ class GwConfigPage(QWidget):
             f"已完成 {len(self._dev_write_results)} / {len(self._DEV_WRITE_STEPS)} 步，"
             f"后续步骤未执行。"
         )
-        QMessageBox.warning(self, "写入失败", "\n".join(lines))
+        self._write_failed(lines)
 
     def _device_write_all_done(self):
         """2 步设备信息全部写入成功：恢复按钮、更新状态、汇总展示"""
@@ -1267,13 +1270,15 @@ class GwConfigPage(QWidget):
             step_lines.append(f"    请求：{req_hex}")
             step_lines.append(f"    响应：{resp_hex}")
 
-        QMessageBox.information(
+        dialogs.success(
             self, "写入成功",
             f"设备基本信息标识已分 {len(self._DEV_WRITE_STEPS)} 步写入设备"
-            f"（从机地址 {self._dev_write_slave}）：\n"
-            f"  表计ID：{self._dev_write_meter_id}\n"
-            f"  设备型号：{self._dev_write_model}\n"
-            f"\n报文流水：\n" + "\n".join(step_lines)
+            f"（从机地址 {self._dev_write_slave}）。",
+            detail=(
+                f"表计 ID：{self._dev_write_meter_id}\n"
+                f"设备型号：{self._dev_write_model}\n"
+                "\n报文流水\n" + "\n".join(step_lines)
+            ),
         )
 
     # ===== 读取 =====
@@ -1293,10 +1298,7 @@ class GwConfigPage(QWidget):
                 <CRC_LO CRC_HI>
         """
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "读取失败",
-                "串口未连接，无法读取参数。\n（演示模式将直接使用默认值）"
-            )
+            self._warn_not_connected("读取国网协议参数")
             return
 
         # modbus 从机地址取自当前选中设备
@@ -1304,26 +1306,18 @@ class GwConfigPage(QWidget):
 
         # 构建请求帧（<slave> 66 03 01 20 00 + CRC）
         request = build_gw_read_frame(slave)
-        hex_req = " ".join(f"{b:02X}" for b in request)
 
         try:
             # 真实模式由 serial_manager 走串口；模拟模式也会生成响应帧
             resp_bytes = serial_manager.transact(bytes(request))
             if not resp_bytes:
-                QMessageBox.warning(
-                    self, "读取失败",
-                    "设备无响应（超时），请检查串口连接和从机地址。"
-                )
+                self._read_failed("设备无响应（超时）。请检查串口连接和从机地址。")
                 return
 
             parsed = parse_gw_read_response(list(resp_bytes))
             if parsed is None:
-                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-                QMessageBox.warning(
-                    self, "读取失败",
-                    f"响应帧解析失败：\n{hex_resp}\n\n"
-                    f"（期望：FC=0x{GW_FC:02X} + 至少 20 字节 + CRC 通过）"
-                )
+                self._read_failed("响应帧解析失败。", resp_bytes,
+                                  f"FC=0x{GW_FC:02X} + 至少 20 字节 + CRC 通过")
                 return
 
             # 按解析结果回填表单
@@ -1340,15 +1334,9 @@ class GwConfigPage(QWidget):
             self._sync_device_slave_id(parsed["addr"])
             self._set_synced(True)
 
-            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-            QMessageBox.information(
-                self, "读取成功",
-                f"已从设备（从机地址 {slave}）读取国网协议参数\n\n"
-                f"请求：{hex_req}\n"
-                f"响应：{hex_resp}"
-            )
+            self._read_ok("国网协议参数", slave, request, resp_bytes, [])
         except Exception as e:
-            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
+            self._read_failed(f"读取时出现异常：{e}")
 
     def _set_fields(self, *, addr: int, baud_code: int = None,
                     parity_code: int = None, reset_time: bool = False,
@@ -1427,10 +1415,8 @@ class GwConfigPage(QWidget):
         # 2) 待写入的新通信地址：本卡「通信地址」
         new_addr = self._parse_addr(self.f_comm_addr.text())
         if new_addr is None:
-            QMessageBox.warning(
-                self, "写入失败",
-                "「表计通信标识」中的通信地址必须为 1 ~ 247 之间的整数"
-            )
+            dialogs.warning(self, "通信地址格式不正确",
+                            "「表计通信标识」中的通信地址必须是 1 到 247 之间的整数。")
             return
 
         baud = self.f_baud.currentData()
@@ -1447,19 +1433,14 @@ class GwConfigPage(QWidget):
         second = qdt.time().second()
 
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "写入失败",
-                "串口未连接，无法写入参数。\n（演示模式将只显示待写入的值）"
-            )
-            # 即使未连接，仍然展示参数让用户确认
-            QMessageBox.information(
-                self, "待写入参数（演示）",
+            # 串口未连接：不写入，只让用户预览待写入的参数
+            dialogs.info(self, "待写入的国网协议参数（预览）", "串口未连接，以下参数还没有写入设备。", detail=(
                 f"从机地址（当前）：{slave}\n"
                 f"通信地址（待写入）：{new_addr}\n"
                 f"波特率：{baud}（{self.f_baud.currentText().split(':')[1]}）\n"
                 f"奇偶校验位：{parity}（{self.f_parity.currentText().split(':')[1]}）\n"
                 f"日期时间：{dt_str}"
-            )
+            ))
             return
 
         # 把所有参数暂存到 self，下一步状态机按顺序取用
@@ -1570,7 +1551,7 @@ class GwConfigPage(QWidget):
             lines.append("回包：" + " ".join(f"{b:02X}" for b in resp))
         lines.append(f"已完成 {len(self._write_results)} / {len(self._WRITE_STEPS)} 步，"
                      f"后续步骤未执行。")
-        QMessageBox.warning(self, "写入失败", "\n".join(lines))
+        self._write_failed(lines)
 
     def _write_all_done(self):
         """4 步全部成功：恢复按钮、同步设备地址、汇总展示"""
@@ -1603,15 +1584,16 @@ class GwConfigPage(QWidget):
             if new_addr != slave else
             f"  通信地址：{new_addr}（未变）\n"
         )
-        QMessageBox.information(
-            self, "写入成功",
-            f"国网协议参数已分 4 步写入设备：\n"
-            f"  从机地址（发送时）：{slave}\n"
-            + addr_note +
-            f"  波特率：{baud}\n"
-            f"  奇偶校验位：{parity}\n"
-            f"  日期时间：{dt_str}\n"
-            f"\n报文流水：\n" + "\n".join(step_lines)
+        dialogs.success(
+            self, "写入成功", "国网协议参数已分 4 步写入设备。",
+            detail=(
+                f"从机地址（发送时）：{slave}\n"
+                + addr_note
+                + f"波特率：{baud}\n"
+                f"奇偶校验位：{parity}\n"
+                f"日期时间：{dt_str}\n"
+                "\n报文流水\n" + "\n".join(step_lines)
+            ),
         )
 
     # ===== 第三卡：传感器状态 读取 / 自动采集 =====
@@ -1625,34 +1607,23 @@ class GwConfigPage(QWidget):
                 状态数据按小端 uint16 解析 → bit reversal → 提取 Bit0~Bit9。
         """
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "读取失败",
-                "串口未连接，无法读取传感器状态。"
-            )
+            self._warn_not_connected("读取传感器状态")
             return
 
         slave = self._get_current_slave()
 
         request = build_gw_sensor_status_read_frame(slave)
-        hex_req = " ".join(f"{b:02X}" for b in request)
 
         try:
             resp_bytes = serial_manager.transact(bytes(request))
             if not resp_bytes:
-                QMessageBox.warning(
-                    self, "读取失败",
-                    "设备无响应（超时），请检查串口连接和从机地址。"
-                )
+                self._read_failed("设备无响应（超时）。请检查串口连接和从机地址。")
                 return
 
             parsed = parse_gw_sensor_status_response(list(resp_bytes))
             if parsed is None:
-                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-                QMessageBox.warning(
-                    self, "读取失败",
-                    f"响应帧解析失败：\n{hex_resp}\n\n"
-                    f"（期望：FC=0x{GW_FC:02X} + 12 字节 + CRC 通过）"
-                )
+                self._read_failed("响应帧解析失败。", resp_bytes,
+                                  f"FC=0x{GW_FC:02X} + 12 字节 + CRC 通过")
                 return
 
             # 更新 UI（与自动采集同逻辑）
@@ -1694,22 +1665,16 @@ class GwConfigPage(QWidget):
             self._update_sensor_time()
 
             # 汇总弹窗
-            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
             status_lines = [
                 f"  传感器状态：{'异常' if parsed['sensor_status'] else '正常'}",
             ]
             for label, key in zip(status_labels, status_keys):
                 val = "异常" if parsed.get(key, False) else "正常"
                 status_lines.append(f"  {label}：{val}")
-            QMessageBox.information(
-                self, "读取成功",
-                f"已从设备（从机地址 {slave}）读取传感器状态\n\n"
-                f"请求：{hex_req}\n"
-                f"响应：{hex_resp}\n\n"
-                f"解析结果：\n" + "\n".join(status_lines)
-            )
+            self._read_ok("传感器状态", slave, request, resp_bytes,
+                          [line.strip() for line in status_lines])
         except Exception as e:
-            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
+            self._read_failed(f"读取时出现异常：{e}")
 
     def _toggle_auto_sensor(self):
         """切换自动采集开关"""
@@ -1808,10 +1773,7 @@ class GwConfigPage(QWidget):
                 数据按 float32 小端解析；全 FF 显示 ------。
         """
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "读取失败",
-                "串口未连接，无法读取温度压力密度数据。"
-            )
+            self._warn_not_connected("读取温度压力密度数据")
             return
 
         # modbus 从机地址取自当前选中设备
@@ -1819,25 +1781,17 @@ class GwConfigPage(QWidget):
 
         # 构建请求帧
         request = build_gw_realtime_read_frame(slave)
-        hex_req = " ".join(f"{b:02X}" for b in request)
 
         try:
             resp_bytes = serial_manager.transact(bytes(request))
             if not resp_bytes:
-                QMessageBox.warning(
-                    self, "读取失败",
-                    "设备无响应（超时），请检查串口连接和从机地址。"
-                )
+                self._read_failed("设备无响应（超时）。请检查串口连接和从机地址。")
                 return
 
             parsed = parse_gw_realtime_read_response(list(resp_bytes))
             if parsed is None:
-                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-                QMessageBox.warning(
-                    self, "读取失败",
-                    f"响应帧解析失败：\n{hex_resp}\n\n"
-                    f"（期望：FC=0x{GW_FC:02X} + 38 字节 + CRC 通过）"
-                )
+                self._read_failed("响应帧解析失败。", resp_bytes,
+                                  f"FC=0x{GW_FC:02X} + 38 字节 + CRC 通过")
                 return
 
             # DI → metric 名称的映射
@@ -1869,25 +1823,16 @@ class GwConfigPage(QWidget):
             self.realtime_state_tag.update_state("已采集", "ok")
             self._update_realtime_time()
 
-            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
             field_labels = {
                 "density":  "密度值",
                 "temp":     "温度值",
                 "pressure": "相对压力",
                 "water":    "微水",
             }
-            filled_lines = "\n".join(
-                f"  {field_labels[n]}：{v}" for n, v in filled
-            )
-            QMessageBox.information(
-                self, "读取成功",
-                f"已从设备（从机地址 {slave}）读取温度压力密度数据\n\n"
-                f"请求：{hex_req}\n"
-                f"响应：{hex_resp}\n\n"
-                f"解析结果：\n{filled_lines}"
-            )
+            self._read_ok("温度压力密度数据", slave, request, resp_bytes,
+                          [f"{field_labels[n]}：{v}" for n, v in filled])
         except Exception as e:
-            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
+            self._read_failed(f"读取时出现异常：{e}")
 
     def _toggle_auto_realtime(self):
         """切换实时数据自动采集开关"""
@@ -1985,10 +1930,7 @@ class GwConfigPage(QWidget):
                 数据按 float32 大端解析，保留 4 位小数。
         """
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "读取失败",
-                "串口未连接，无法读取阈值。\n（演示模式将直接使用默认值）"
-            )
+            self._warn_not_connected("读取阈值参数")
             return
 
         # modbus 从机地址取自当前选中设备
@@ -1996,26 +1938,18 @@ class GwConfigPage(QWidget):
 
         # 构建请求帧
         request = build_gw_threshold_read_frame(slave)
-        hex_req = " ".join(f"{b:02X}" for b in request)
 
         try:
             # 真实模式由 serial_manager 走串口；模拟模式也会生成响应帧
             resp_bytes = serial_manager.transact(bytes(request))
             if not resp_bytes:
-                QMessageBox.warning(
-                    self, "读取失败",
-                    "设备无响应（超时），请检查串口连接和从机地址。"
-                )
+                self._read_failed("设备无响应（超时）。请检查串口连接和从机地址。")
                 return
 
             parsed = parse_gw_threshold_read_response(list(resp_bytes))
             if parsed is None:
-                hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
-                QMessageBox.warning(
-                    self, "读取失败",
-                    f"响应帧解析失败：\n{hex_resp}\n\n"
-                    f"（期望：FC=0x{GW_FC:02X} + 38 字节 + CRC 通过）"
-                )
+                self._read_failed("响应帧解析失败。", resp_bytes,
+                                  f"FC=0x{GW_FC:02X} + 38 字节 + CRC 通过")
                 return
 
             # DI → 表单字段的映射
@@ -2049,30 +1983,21 @@ class GwConfigPage(QWidget):
 
             self._set_threshold_synced(True)
 
-            hex_resp = " ".join(f"{b:02X}" for b in resp_bytes)
             field_labels = {
                 "alarm":    "报警节点阈值",
                 "lock1":    "闭锁1阈值",
                 "lock2":    "闭锁2阈值",
                 "overpress": "超压节点阈值",
             }
-            filled_lines = "\n".join(
-                f"  {field_labels[f]}：{v:.4f}" for f, v in filled
-            ) or "  （无）"
-            missing_note = (
-                f"\n\n未返回/无效的 DI（显示为 ------）："
-                f"{[f'0x{di:04X}' for di in missing]}"
-                if missing else ""
-            )
-            QMessageBox.information(
-                self, "读取成功",
-                f"已从设备（从机地址 {slave}）读取阈值参数\n\n"
-                f"请求：{hex_req}\n"
-                f"响应：{hex_resp}\n\n"
-                f"解析结果：\n{filled_lines}{missing_note}"
-            )
+            result_lines = [f"{field_labels[f]}：{v:.4f}" for f, v in filled]
+            if missing:
+                result_lines.append(
+                    "未返回或无效、显示为 ------ 的 DI："
+                    + ", ".join(f"0x{di:04X}" for di in missing)
+                )
+            self._read_ok("阈值参数", slave, request, resp_bytes, result_lines)
         except Exception as e:
-            QMessageBox.warning(self, "读取失败", f"读取异常：{e}")
+            self._read_failed(f"读取时出现异常：{e}")
 
     # 阈值写入步骤顺序：报警节点 → 闭锁1 → 闭锁2 → 超压节点
     # 每步等待设备回包后再发下一步，全部成功提示"写入成功"，任一失败提示"写入失败"
@@ -2110,10 +2035,8 @@ class GwConfigPage(QWidget):
         for name, edit in self._thr_fields.items():
             text = edit.text().strip()
             if not text:
-                QMessageBox.warning(
-                    self, "写入失败",
-                    f"阈值不能为空：{self._THR_STEP_LABELS[name]}"
-                )
+                dialogs.warning(self, f"{self._THR_STEP_LABELS[name]}不能为空",
+                                "填一个数字，或保持 ------ 表示不修改。")
                 return
             # "------" 是读取时设备返回全 0xFF 的占位符，写入时直接发 FFFFFFFF
             if text == "------":
@@ -2122,30 +2045,24 @@ class GwConfigPage(QWidget):
             try:
                 float(text)  # 校验为合法数字
             except ValueError:
-                QMessageBox.warning(
-                    self, "写入失败",
-                    f"阈值必须为数字或 ------：{text}"
-                )
+                dialogs.warning(self, f"{self._THR_STEP_LABELS[name]}不是有效的数字",
+                                f"填写的值是「{text}」。请填一个数字，或保持 ------。")
                 return
             values[name] = text
 
         # 3) 串口未连接：演示模式，仅展示待写入值
         if not serial_manager.is_connected:
-            QMessageBox.warning(
-                self, "写入失败",
-                "串口未连接，无法写入阈值。\n（演示模式将只显示待写入的值）"
-            )
+            # 串口未连接：不写入，只让用户预览待写入的阈值
             display = {
                 k: ("FFFFFFFF（无效/未配置）" if v == "------" else v)
                 for k, v in values.items()
             }
-            QMessageBox.information(
-                self, "待写入阈值（演示）",
+            dialogs.info(self, "待写入的阈值（预览）", "串口未连接，以下阈值还没有写入设备。", detail=(
                 f"报警节点阈值：{display['alarm']}\n"
                 f"闭锁1阈值：{display['lock1']}\n"
                 f"闭锁2阈值：{display['lock2']}\n"
                 f"超压节点阈值：{display['overpress']}"
-            )
+            ))
             return
 
         # 4) 初始化分步写入状态机
@@ -2236,7 +2153,7 @@ class GwConfigPage(QWidget):
             f"已完成 {len(self._thr_write_results)} / {len(self._THR_WRITE_STEPS)} 步，"
             f"后续步骤未执行。"
         )
-        QMessageBox.warning(self, "写入失败", "\n".join(lines))
+        self._write_failed(lines)
 
     def _threshold_write_all_done(self):
         """4 步阈值全部写入成功：恢复按钮、更新状态、汇总展示"""
@@ -2263,12 +2180,11 @@ class GwConfigPage(QWidget):
             else:
                 display_lines.append(f"  {self._THR_STEP_LABELS[step]}：{raw}")
 
-        QMessageBox.information(
+        dialogs.success(
             self, "写入成功",
             f"阈值参数已分 {len(self._THR_WRITE_STEPS)} 步写入设备"
-            f"（从机地址 {self._thr_write_slave}）：\n"
-            + "\n".join(display_lines)
-            + f"\n\n报文流水：\n" + "\n".join(step_lines)
+            f"（从机地址 {self._thr_write_slave}）。",
+            detail="\n".join(display_lines) + "\n报文流水\n" + "\n".join(step_lines),
         )
 
     # ===== 生命周期 =====

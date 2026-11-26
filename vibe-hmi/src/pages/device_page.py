@@ -7,13 +7,13 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QGridLayout, QLineEdit,
-    QMessageBox, QAbstractItemView, QHeaderView, QCheckBox,
+    QAbstractItemView, QHeaderView, QCheckBox,
     QScrollArea, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
-from .. import theme
+from .. import dialogs, theme
 from ..store import store
 
 COLS = ["", "设备名称", "从站地址", "参数数量", "设备位置", "描述"]
@@ -300,15 +300,15 @@ class DevicePage(QWidget):
     def _save(self):
         name = self.f_name.text().strip()
         if not name:
-            QMessageBox.warning(self, "保存失败", "设备名称不能为空")
+            dialogs.warning(self, "设备名称不能为空", "请填写设备名称后再保存。")
             return
         try:
             slave_id = int(self.f_slave.text().strip())
             if not (1 <= slave_id <= 247):
-                QMessageBox.warning(self, "保存失败", "从站地址范围 1-247")
+                dialogs.warning(self, "从站地址超出范围", "从站地址应在 1 到 247 之间。")
                 return
         except ValueError:
-            QMessageBox.warning(self, "保存失败", "从站地址必须是数字")
+            dialogs.warning(self, "从站地址不是数字", "请填写 1 到 247 之间的整数。")
             return
         location = self.f_location.text().strip()
         desc = self.f_desc.text().strip()
@@ -327,14 +327,13 @@ class DevicePage(QWidget):
         if not checked:
             return
         names = [store.devices[r]["name"] for r in checked]
-        reply = QMessageBox.question(
-            self, "删除确认",
-            f"确认删除 {len(names)} 个设备：{', '.join(names)}？\n"
-            "设备的所有参数将同时删除。\n"
-            "历史采样与告警数据将保留在库中，但删除后不再可见。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        listed = "、".join(f"「{n}」" for n in names)
+        if dialogs.confirm(
+            self, f"删除 {len(names)} 个设备？",
+            f"将删除 {listed}，它们的全部参数会一并删除。",
+            note="历史采样与告警数据会保留在库中，但删除后不再可见。",
+            danger=True, irreversible=True, ok_text="删除",
+        ):
             ids = [store.devices[r]["id"] for r in checked]
             for did in ids:
                 store.delete_device(did)

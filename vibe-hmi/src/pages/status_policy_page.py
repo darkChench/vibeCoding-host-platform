@@ -9,12 +9,12 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QCheckBox, QLineEdit, QComboBox,
-    QAbstractItemView, QHeaderView, QMessageBox,
+    QAbstractItemView, QHeaderView,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
-from .. import theme
+from .. import toast, theme
 from ..store import store
 
 
@@ -221,7 +221,7 @@ class StatusPolicyPage(QWidget):
             scope=self.combo_scope.currentText(),
         )
         self._on_timeout_changed()
-        QMessageBox.information(self, "保存", "状态策略已保存")
+        toast.show(self, "状态策略已保存")
 
     def _reset(self):
         """恢复默认策略"""

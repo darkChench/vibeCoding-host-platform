@@ -341,10 +341,10 @@ QPlainTextEdit[role="terminal"] {
 | 原型类 | 用途 | PySide6 | QSS 要点 |
 | :--- | :--- | :--- | :--- |
 | `.modal`（1080px）/ `.modal-backdrop` | PRD 编辑器 | `QDialog`（模态）+ 自绘遮罩 | 宽 `min(1080px,100%)`，44px head，圆角 8px，阴影 `shadow_window`，遮罩 `rgba(15,23,42,.42)` |
-| `.action-modal`（460px） | 通用操作确认 | `QDialog`（模态） | 460px，head + action-body（14px）+ footer，圆角 8px |
+| `.action-modal`（460px） | 通用操作确认 | `DialogOverlay`（`src/dialogs.py`，主窗口内的遮罩 + 卡片） | 宽 460~480px，圆角 8px，投影 blur 34 / offset (0,10)，遮罩 `rgba(15,23,42,.42)` |
 | `.menu-popup` | 菜单栏下拉 | `QMenu` | min-width 178px，圆角 6px，padding 5px，项 min-height 30px hover 底 `#e9f4ff` 字 `--primary` |
 | `.history-popover`（560px/260h） | 发送历史 | `QFrame`（绝对定位浮层）或 `QMenu` 自定义 | 定位：left 10px、bottom 46px（相对 console） |
-| `.toast` | 操作反馈 | `QFrame`（无边框，定时隐藏） | 右下 20px，圆角 8px，底 `#17202c` 白字 14px |
+| `.toast` | 操作反馈 | `Toast`（`src/toast.py`，主窗口内的子控件） | 右下角、状态栏上方 16px，圆角 8px，底 `#17202c` 白字 13px，2.5 秒自动消失 |
 
 ```qss
 /* QMenu —— 菜单弹窗 */
@@ -361,9 +361,10 @@ QDialog { border: 1px solid #9eabba; border-radius: 8px; background: #ffffff; }
 
 **偏差说明**：
 
-- 模态遮罩：QDialog 模态自带半透明遮罩但颜色不可控，需 `setWindowOpacity` 或自绘 `QFrame` 全屏遮罩层近似 `rgba(15,23,42,.42)`。
-- 圆角 8px 在 QDialog 上需 `setWindowFlags(Qt::FramelessWindowHint)` + `setAttribute(Qt::WA_TranslucentBackground)` 才生效。
-- Toast 用 `QFrame` + `QTimer::singleShot(1600ms, hide)`，定位 `move(parent.width()-190, parent.height()-60)`。
+- 模态不用 `QDialog`：改为盖在主窗口上的子控件（`src/dialogs.py` 的 `DialogOverlay`），遮罩、圆角、投影都是普通控件绘制。
+  无边框透明窗口在 Windows 上有圆角外发黑的问题（历史页日历弹窗踩过），所以不开独立窗口。
+- 弹框结构：状态图标 + 粗体标题 + 常规字重说明 + 可选的只读详情区（等宽字体）+ 右下角按钮。应用内不再直接用 `QMessageBox`。
+- 轻提示默认 2500ms 后淡出，鼠标停在提示上时不消失；多条堆叠，最新的在最下面。
 
 ---
 
@@ -521,9 +522,9 @@ QFrame[role="ai-tool-card"][state="error"] {
 | `.chart` | QChartView 或 QWebEngineView | 180px 高 |
 | checkbox | QCheckBox | 14×14，自绘对勾 |
 | `.terminal` | QPlainTextEdit 或 QTableWidget | 三列对齐选表格 |
-| `.modal`/`.action-modal` | QDialog | 1080 / 460px |
+| `.modal`/`.action-modal` | QDialog / `DialogOverlay` | 1080 / 460~480px |
 | `.menu-popup` | QMenu | min 178px |
-| `.toast` | QFrame + QTimer | 1600ms |
+| `.toast` | `Toast` + QTimer | 2500ms |
 | `.tag` | QLabel 胶囊 | 999px 圆角 |
 | titlebar/menubar/toolbar/statusbar | QFrame | 34/34/50/28px |
 | `.stat-warn` | QLabel（variant=warn） | 复用 tag.warn 色，AI 未配置状态 |

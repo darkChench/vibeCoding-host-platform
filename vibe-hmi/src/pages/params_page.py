@@ -10,11 +10,11 @@ CRUD 走 store（持久化 JSON），校验规则（名称唯一/地址合法hex
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QComboBox, QLineEdit, QSpinBox, QCheckBox,
-    QFormLayout, QFrame, QMessageBox, QAbstractItemView, QSizePolicy,
+    QFormLayout, QFrame, QAbstractItemView, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QWheelEvent
-from .. import theme
+from .. import dialogs, theme
 from ..store import store
 
 
@@ -566,7 +566,7 @@ class ParamsPage(QWidget):
         result = store.validate_param(data, device_id=store.current_device_id, exclude_name=self._editing_name if self._edit_mode == "edit" else None)
         if not result["ok"]:
             msgs = "\n".join(f"• {k}: {v}" for k, v in result["errors"].items())
-            QMessageBox.warning(self, "保存失败", "请修正以下错误：\n" + msgs)
+            dialogs.error(self, "参数有错误，未能保存", "请修正以下问题后重新保存。", detail=msgs)
             return
 
         params = store._cur_params()
@@ -589,12 +589,10 @@ class ParamsPage(QWidget):
             return
         params = store.filtered_params()
         names = [params[r]["name"] for r in checked]
-        reply = QMessageBox.question(
-            self, "删除确认",
-            f"确认删除 {len(names)} 条参数：{', '.join(names)}？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        if dialogs.confirm(
+            self, f"删除 {len(names)} 条参数？", "将删除以下参数，删除后需要重新添加。",
+            detail="\n".join(names), danger=True, irreversible=True, ok_text="删除",
+        ):
             params = store._cur_params()
             store.params[store.current_device_id] = [p for p in params if p["name"] not in names]
             store.save_params()

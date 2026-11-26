@@ -14,7 +14,7 @@ python -m venv .venv
 # 启动
 .venv\Scripts\python.exe main.py
 
-# 协议层测试（30 个 pytest，改动协议层必须全部通过）
+# 全量测试（协议层 / 串口 / 历史库 / 弹框 / 轻提示），改动后必须全部通过
 .venv\Scripts\python.exe -m pytest tests/
 
 # 打包（PyInstaller onedir，产物 dist/vibe-hmi/）
@@ -26,6 +26,8 @@ build.bat
 - 分层：UI 层（`src/pages/`）禁止直接访问串口；协议在 `src/protocol/`，串口在 `src/serial/`，轮询在 `src/workers/`，LLM 在 `src/ai/`
 - `src/store.py` 是全局状态单例，运行时配置持久化到 `config/*.json`
 - 历史采样与报警均存 `save/history.db`（SQLite，含按天过期策略，默认 90 天）
+- 弹框统一走 `src/dialogs.py`，轻提示统一走 `src/toast.py`（2026-11-26 用户确认的设计）。文案惯例：标题说"是什么事"，
+  说明说"该怎么办"；失败类把报文、异常等细节放进 `detail`。简短的成功反馈用轻提示，不打断操作
 
 ## 记录要求
 
@@ -36,4 +38,5 @@ build.bat
 - 禁止提交 `config/model_config.json`（含 API Key）
 - `config/`、`save/`、`history/`、`build/`、`dist/`、`.venv/` 均为运行时/构建产物，禁止提交
 - 禁止删除或跳过 `tests/` 现有测试用例
+- 禁止直接使用 `QMessageBox`，也不要新开独立的弹窗窗口：都用 `src/dialogs.py`（遮罩 + 卡片是主窗口的子控件）
 - 提交前在仓库根目录运行 `make lint` 通过
