@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
+from PySide6.QtGui import QTextCharFormat, QTextCursor, QColor, QFont
+from collections.abc import Callable
 import os
 import time
 from datetime import datetime
@@ -27,6 +29,15 @@ from ..serial.serial_manager import serial_manager
 HISTORY_DIR = os.path.join(paths.app_root(), "history")
 # 日志大小阈值（10MB），超过自动保存为 txt
 LOG_SIZE_THRESHOLD = 10 * 1024 * 1024
+# 终端最多保留的行数（防内存膨胀）；更早的行只留在 _lines 里供保存
+TERMINAL_MAX_LINES = 5000
+# 终端正文色 / 时间戳色
+TEXT_COLOR = "#17202c"
+TIMESTAMP_COLOR = "#0b6fb3"
+# ASCII 显示时 \r\n 对应的块内换行符：Qt 文本版面把它当作强制换行，不需要经过 HTML
+ASCII_LINE_BREAK = "\u2028"
+# 一行日志的显示定义：[(文本, 颜色, 是否加粗), ...]
+Segments = list[tuple[str, str, bool]]
 
 
 def _now_hms() -> str:
@@ -56,32 +67,25 @@ def _ascii_to_bytes(text: str) -> list[int]:
     return list(text.encode("ascii", errors="replace"))
 
 
+# 字节 → ASCII 显示字符：可打印字符原样，\r 和 \n 变成块内换行，其余显示为 .
+_ASCII_DISPLAY = {
+    b: (chr(b) if 32 <= b < 127 else (ASCII_LINE_BREAK if b in (0x0D, 0x0A) else "."))
+    for b in range(256)
+}
+
+
 def _hex_to_ascii(hex_str: str) -> str:
-    """HEX 字符串 → ASCII 文本（不可打印字符显示为 .，\r\n 合并为一个 <br>）"""
-    cleaned = hex_str.replace(" ", "")
-    chars = []
-    i = 0
-    while i < len(cleaned) - 1:
-        try:
-            b = int(cleaned[i:i+2], 16)
-            # \r\n (0x0D0A) 合并为一个换行
-            if b == 0x0D and i + 2 < len(cleaned):
-                b2 = int(cleaned[i+2:i+4], 16)
-                if b2 == 0x0A:
-                    chars.append("<br>")
-                    i += 4
-                    continue
-            # 单独的 \r 或 \n 也转为换行
-            if b in (0x0D, 0x0A):
-                chars.append("<br>")
-            elif 32 <= b < 127:
-                chars.append(chr(b))
-            else:
-                chars.append(".")
-        except ValueError:
-            chars.append(".")
-        i += 2
-    return "".join(chars)
+    """HEX 字符串 → ASCII 文本（不可打印字符显示为 .，\\r\\n 转为块内换行符）。
+
+    \\r\\n 算一个换行，单独的 \\r 或 \\n 各算一个。整帧一次转换完，不逐字节循环：
+    整体重绘几千行时，这一步的耗时是大头。
+    """
+    try:
+        text = bytes.fromhex(hex_str.replace(" ", "")).decode("latin-1")
+    except ValueError:
+        return hex_str  # 不是合法 HEX 帧：按原样显示
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.translate(_ASCII_DISPLAY)
 
 
 # 行结束符映射（显示符号 → 实际字节）
@@ -122,6 +126,8 @@ class SerialPage(QWidget):
         # 三个 tab 的日志行：[direction, label, hex_content]
         # hex_content 始终存 HEX 字符串，显示时按 _display_mode 转换
         self._lines: dict[str, list[list[str]]] = {"raw": [], "stats": [], "diagnostic": []}
+        # 字符格式缓存：(颜色, 是否加粗) → QTextCharFormat
+        self._char_formats: dict[tuple[str, bool], QTextCharFormat] = {}
         self._build_ui()
         self._refresh_terminal()
         # 接收串口数据（真实模式）
@@ -225,7 +231,7 @@ class SerialPage(QWidget):
         self.terminal = QPlainTextEdit()
         self.terminal.setObjectName("terminal")
         self.terminal.setReadOnly(True)
-        self.terminal.setMaximumBlockCount(5000)  # 限制行数防内存膨胀
+        self.terminal.setMaximumBlockCount(TERMINAL_MAX_LINES)  # 限制行数防内存膨胀
         self.terminal.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)  # 不自动换行，长行水平滚动
         cl.addWidget(self.terminal, 1)
 
@@ -407,9 +413,10 @@ class SerialPage(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "打开失败", f"无法打开目录：{e}")
 
-    def _append_to_terminal(self, line: list[str]):
-        """追加一行到终端 QPlainTextEdit。
+    def _line_segments(self, line: list[str]) -> Segments:
+        """一行日志在终端里的显示定义。
 
+        终端显示格式的唯一定义处：实时追加和整体重绘共用，两条路径显示一致。
         content 始终存 HEX 字符串，显示时按 _display_mode 转换：
         - hex: 原样显示 HEX
         - ascii: HEX → ASCII 文本（不可打印字符显示为 .）
@@ -417,12 +424,17 @@ class SerialPage(QWidget):
         """
         direction, label, content = line[0], line[1], line[2]
         stored_ts = line[3] if len(line) > 3 else ""
-        # 按显示模式转换内容（仅 tx/rx 方向行需要转换，info/warn 原样显示）
-        if direction in ("tx", "rx") and self._display_mode == "ascii":
+        # 报文行（TX/RX）正文直接用方向色（RX 绿 / TX 蓝），行首不再显示标签：
+        # 颜色已经区分收发方向，标签是重复信息。
+        # 诊断行（TIMEOUT/CRC/WARN）和 INFO 提示的正文保持深色——
+        # 它们同样带 tx/rx 方向，按方向上色会把"超时"显示成绿色
+        is_frame = direction in ("tx", "rx") and label in ("TX", "RX")
+        # 只有报文行的内容才是 HEX 帧，才按显示模式转换。
+        # 诊断行虽然也带 tx/rx 方向，内容却是文字，按 HEX 转换会变成一串点
+        if is_frame and self._display_mode == "ascii":
             display_content = _hex_to_ascii(content)
         else:
             display_content = content
-        ts = stored_ts if self._show_timestamp else ""
         # 方向色（白底用深色，保证可读）
         color_map = {
             "tx": "#0b6fb3",   # 深蓝（TX）
@@ -430,39 +442,79 @@ class SerialPage(QWidget):
             "warn": "#bf3a46", # 红（WARN）
             "info": "#617083", # 灰（INFO）
         }
-        color = color_map.get(direction, "#17202c")
-        # 报文行（TX/RX）正文直接用方向色（RX 绿 / TX 蓝），行首不再显示标签：
-        # 颜色已经区分收发方向，标签是重复信息。
-        # 诊断行（TIMEOUT/CRC/WARN）和 INFO 提示的正文保持深色——
-        # 它们同样带 tx/rx 方向，按方向上色会把"超时"显示成绿色
-        is_frame = direction in ("tx", "rx") and label in ("TX", "RX")
-        content_color = color if is_frame or direction == "warn" else "#17202c"
-        # HTML 行
-        ts_part = f'<span style="color:#0b6fb3;font-weight:bold;">{ts}</span>  ' if ts else ""
+        color = color_map.get(direction, TEXT_COLOR)
+        content_color = color if is_frame or direction == "warn" else TEXT_COLOR
+        segments: Segments = []
+        if self._show_timestamp and stored_ts:
+            segments += [(stored_ts, TIMESTAMP_COLOR, True), ("  ", TEXT_COLOR, False)]
         # 行首标签只给非报文行（TIMEOUT/WARN/INFO 等）；报文行靠颜色区分方向
-        label_part = "" if is_frame else f'<span style="color:{color};font-weight:bold;">{label}</span>  '
-        content_str = f'<span style="color:{content_color};">{display_content}</span>'
-        self.terminal.appendHtml(f'{ts_part}{label_part}{content_str}')
-        # 滚动到底部
-        self.terminal.verticalScrollBar().setValue(self.terminal.verticalScrollBar().maximum())
+        if not is_frame:
+            segments += [(label, color, True), ("  ", TEXT_COLOR, False)]
+        segments.append((display_content, content_color, False))
+        return segments
 
-    def _refresh_terminal(self):
-        """重建终端内容（切换 tab / 时间戳变化时）"""
-        self.terminal.clear()
-        for line in self._lines.get(self._current_tab, []):
-            if self._current_tab == "stats":
-                self._append_stats_line(line)
-            else:
-                self._append_to_terminal(line)
-
-    def _append_stats_line(self, line: list[str]):
+    def _stats_segments(self, line: list[str]) -> Segments:
         """统计 tab 行格式（白底深色，和原始日志一致）"""
         direction, label, content = line[0], line[1], line[2]
         color = "#11875d" if direction == "rx" else "#0b6fb3"
-        self.terminal.appendHtml(
-            f'<span style="color:{color};font-weight:bold;">{label}</span>  '
-            f'<span style="color:#17202c;">{content}</span>'
-        )
+        return [(label, color, True), ("  ", TEXT_COLOR, False), (content, TEXT_COLOR, False)]
+
+    def _char_format(self, color: str, bold: bool) -> QTextCharFormat:
+        """取（并缓存）指定颜色/粗细的字符格式"""
+        key = (color, bold)
+        fmt = self._char_formats.get(key)
+        if fmt is None:
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            if bold:
+                fmt.setFontWeight(QFont.Weight.Bold)
+            self._char_formats[key] = fmt
+        return fmt
+
+    def _render_lines(self, lines: list[list[str]], segments_of: Callable[[list[str]], Segments]) -> None:
+        """把若干行日志写到终端末尾。
+
+        直接用 QTextCursor 写带格式的文本，不拼 HTML：一是不必逐行解析 HTML，
+        二是内容里的 < > & 等字符会原样显示，不会被当成标签吃掉。
+        所有行放在同一个编辑块里：写完之前不触发布局和滚动条重算，
+        所以整体重绘几千行也只付出一次布局的代价。
+        """
+        doc = self.terminal.document()
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        # 文档为空（刚清空）时首行直接写进现有的空块，避免顶部多出一个空行
+        need_block = not doc.isEmpty()
+        cursor.beginEditBlock()
+        for line in lines:
+            segments = segments_of(line)
+            if need_block:
+                cursor.insertBlock()
+            for text, color, bold in segments:
+                if text:
+                    cursor.insertText(text, self._char_format(color, bold))
+            need_block = True
+        cursor.endEditBlock()
+
+    def _scroll_to_bottom(self):
+        scrollbar = self.terminal.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _append_to_terminal(self, line: list[str]):
+        """追加一行到终端，并滚动到底部"""
+        self._render_lines([line], self._line_segments)
+        self._scroll_to_bottom()
+
+    def _refresh_terminal(self):
+        """重建终端内容（切换 tab / 时间戳变化时）"""
+        cap = self.terminal.document().maximumBlockCount()
+        # 终端最多只留 cap 行，更早的行渲染出来也会立刻被丢弃，所以只重绘最后 cap 行
+        lines = self._lines.get(self._current_tab, [])[-cap:]
+        self.terminal.clear()
+        if self._current_tab == "stats":
+            self._render_lines(lines, self._stats_segments)
+        else:
+            self._render_lines(lines, self._line_segments)
+        self._scroll_to_bottom()
 
     # ===== tab 切换 =====
 
